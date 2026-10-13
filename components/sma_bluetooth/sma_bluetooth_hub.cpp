@@ -577,10 +577,16 @@ void SmaBluetoothHub::bt_task_loop() {
   bool nvs_passwords_saved = false;
 
   while (!stop_task_) {
+    // External pause gate (see set_paused())
+    if (paused_) {
+      vTaskDelay(pdMS_TO_TICKS(5000));
+      continue;
+    }
+
     // Night mode check
     if (is_nighttime()) {
-      ESP_LOGD(TTAG, "Night mode, sleeping 30 min");
-      vTaskDelay(pdMS_TO_TICKS(30 * 60 * 1000));
+      ESP_LOGD(TTAG, "Night mode, sleeping 60 s");
+      vTaskDelay(pdMS_TO_TICKS(60 * 1000));
       continue;
     }
 
@@ -603,7 +609,7 @@ void SmaBluetoothHub::bt_task_loop() {
     // Poll each device sequentially
     bool any_polled = false;
     for (auto *device : devices_) {
-      if (stop_task_) break;
+      if (stop_task_ || paused_) break;
 
       // Check if it's time to poll this device
       uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
