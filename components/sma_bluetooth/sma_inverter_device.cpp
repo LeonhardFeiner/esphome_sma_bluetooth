@@ -453,7 +453,9 @@ E_RC SmaInverterDevice::get_inverter_data_cfl(SmaBluetoothHub *hub, uint32_t com
 
       // Parse records
       for (uint16_t ii = 41; ii < pkt_buf_pos_ - 3; ii += recordsize) {
-        if (ii + 20 > pkt_buf_pos_) break;
+        // A 64-bit record (recordsize 16) only needs 16 bytes. The fixed "+20"
+        // guard dropped the last 16-byte record of the energy reply (MeteringDyWhOut / EToday).
+        if (ii + (recordsize == 16 ? 16u : 20u) > pkt_buf_pos_) break;
 
         uint8_t *recptr = pkt_buf_ + ii;
         uint32_t code = get_u32(recptr);
