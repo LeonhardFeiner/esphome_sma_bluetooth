@@ -218,6 +218,7 @@ class SmaInverterDevice {
   void load_local_bt_address_();
   char    password_[13]{};       // 12 chars + null
   bool    password_set_{false};
+  bool    configured_password_{false};
   std::string mac_string_;
   std::string name_prefix_;
   uint32_t update_interval_ms_{60000};

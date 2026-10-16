@@ -33,11 +33,15 @@ void SmaInverterDevice::set_mac_address(const std::string &mac) {
 void SmaInverterDevice::set_password(const std::string &pw) {
   memset(password_, 0, sizeof(password_));
   strncpy(password_, pw.c_str(), 12);
-  password_set_ = true;
+  password_set_ = !pw.empty();
+  configured_password_ = true;
 }
 
 void SmaInverterDevice::set_working_password(const std::string &pw) {
-  set_password(pw);
+  memset(password_, 0, sizeof(password_));
+  strncpy(password_, pw.c_str(), 12);
+  password_set_ = !pw.empty();
+  configured_password_ = false;
   ESP_LOGI(TAG, "[%s] Working password cached", mac_string_.c_str());
 }
 
@@ -79,6 +83,12 @@ bool SmaInverterDevice::poll(SmaBluetoothHub *hub) {
     rc = logon(hub, password_, USERGROUP);
     if (rc == E_OK) {
       logged_on = true;
+    } else if (configured_password_) {
+      // Do not clear configured password on transient logon failure,
+      // and do not fall back to default passwords ("0000"/"1111") which locks out the inverter.
+      ESP_LOGW(TAG, "[%s] Configured password logon failed (rc=%d) - preserving password", mac_string_.c_str(), rc);
+      hub->spp_disconnect();
+      return false;
     } else {
       ESP_LOGW(TAG, "[%s] Cached password rejected, clearing cache", mac_string_.c_str());
       password_set_ = false;

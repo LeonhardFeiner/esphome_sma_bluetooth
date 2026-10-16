@@ -632,7 +632,11 @@ void SmaBluetoothHub::bt_task_loop() {
         ESP_LOGD(TTAG, "Poll OK for %s", device->mac_string().c_str());
       } else {
         device->increment_errors();
-        device->publish_unavailable();
+        // Require >= 3 consecutive failed polls before zeroing out power readings
+        // so transient RF interference or packet collisions do not drop power to 0 W.
+        if (device->consecutive_errors() >= 3) {
+          device->publish_unavailable();
+        }
         if (device->consecutive_errors() <= 3) {
           ESP_LOGD(TTAG, "Poll failed for %s (errors: %u)",
                    device->mac_string().c_str(), device->consecutive_errors());
