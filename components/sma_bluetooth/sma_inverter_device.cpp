@@ -410,6 +410,8 @@ E_RC SmaInverterDevice::get_inverter_data(SmaBluetoothHub *hub, getInverterDataT
       command = 0x52000200; first = 0x00237700; last = 0x002377FF; break;
     case MeteringGridMsTotW:
       command = 0x51000200; first = 0x00463600; last = 0x004637FF; break;
+    case SpotRiso:
+      command = 0x51000200; first = 0x00254F00; last = 0x00254FFF; break;
     default:
       return E_BADARG;
   }
@@ -657,6 +659,11 @@ E_RC SmaInverterDevice::get_inverter_data_cfl(SmaBluetoothHub *hub, uint32_t com
             inv_data_.MeteringGridMsTotWOut = value32_; break;
           case MeteringGridMsTotWIn_LRI:
             inv_data_.MeteringGridMsTotWIn = value32_; break;
+          case IsolationLeakRis:
+            if (value32_ > 0 && value32_ != 0xFFFFFFFF && value32_ != 0x7FFFFFFF) {
+              disp_data_.Riso = (float)value32_ / 1000.0f;  // convert Ohm to kOhm
+            }
+            break;
           default:
             break;
         }
@@ -1182,6 +1189,28 @@ bool SmaInverterDevice::publish_sensors() {
   publish_sensor(inverter_fault_sensor_, is_fault_active_);
 #endif
   publish_sensor(last_event_code_sensor_, (float)last_event_code_val_);
+
+  // Efficiency calculation (Pac / Pdc_total * 100%)
+  if (efficiency_sensor_ != nullptr) {
+    float total_pdc = (float)(inv_data_.Pdc1 + inv_data_.Pdc2);
+    float total_pac = (float)inv_data_.TotalPac;
+    if (total_pac == 0.0f) {
+      total_pac = (float)(inv_data_.Pac1 + inv_data_.Pac2 + inv_data_.Pac3);
+    }
+    if (total_pdc >= 100.0f && total_pac > 0.0f) {
+      float eta = (total_pac / total_pdc) * 100.0f;
+      if (eta > 100.0f) eta = 100.0f;
+      if (eta >= 0.0f) publish_sensor(efficiency_sensor_, eta);
+    } else if (total_pac <= 0.0f) {
+      publish_sensor(efficiency_sensor_, 0.0f);
+    }
+  }
+
+  // Insulation resistance (kOhm)
+  if (insulation_resistance_sensor_ != nullptr && disp_data_.Riso > 0.0f) {
+    publish_sensor(insulation_resistance_sensor_, disp_data_.Riso);
+  }
+
   return sensors_created;
 }
 
@@ -1198,6 +1227,8 @@ void SmaInverterDevice::publish_unavailable() {
   }
   if (total_ac_power_ != nullptr)
     total_ac_power_->publish_state(0.0f);
+  if (efficiency_sensor_ != nullptr)
+    efficiency_sensor_->publish_state(0.0f);
 }
 
 // ============================================================

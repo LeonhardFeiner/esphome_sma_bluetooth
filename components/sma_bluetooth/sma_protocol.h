@@ -107,6 +107,7 @@ enum getInverterDataType {
   BatteryInfo         = 1 << 15,
   InverterTemp        = 1 << 16,
   MeteringGridMsTotW  = 1 << 17,
+  SpotRiso            = 1 << 18,
 };
 
 // ---------------------------------------------------------------------------
@@ -116,6 +117,7 @@ enum LriDef {
   OperationHealth                = 0x2148,
   CoolsysTmpNom                 = 0x2377,
   DcMsWatt                      = 0x251E,
+  IsolationLeakRis              = 0x254F,
   MeteringTotWhOut               = 0x2601,
   MeteringDyWhOut                = 0x2622,
   GridMsTotW                     = 0x263F,
@@ -262,6 +264,7 @@ struct DisplayData {
   float GridFreq{0};
   float EToday{0};
   float ETotal{0};
+  float Riso{0};
   bool  needsMissingValues{false};
 };
 
@@ -716,7 +719,7 @@ static const getInverterDataType FAST_QUERY_TYPES[] = {
 static const int NUM_FAST_TYPES = sizeof(FAST_QUERY_TYPES) / sizeof(FAST_QUERY_TYPES[0]);
 
 static const getInverterDataType SLOW_QUERY_TYPES[] = {
-    DeviceStatus, GridRelayStatus, InverterTemp,
+    DeviceStatus, GridRelayStatus, InverterTemp, SpotRiso,
 };
 static const int NUM_SLOW_TYPES = sizeof(SLOW_QUERY_TYPES) / sizeof(SLOW_QUERY_TYPES[0]);
 
@@ -727,7 +730,7 @@ static const int NUM_ONCE_TYPES = sizeof(ONCE_QUERY_TYPES) / sizeof(ONCE_QUERY_T
 
 // Data types where errors are non-fatal (inverter may not support them)
 static const getInverterDataType IGNORABLE_ERROR_TYPES[] = {
-    InverterTemp, MeteringGridMsTotW,
+    InverterTemp, MeteringGridMsTotW, SpotRiso,
 };
 static const int NUM_IGNORABLE = sizeof(IGNORABLE_ERROR_TYPES) / sizeof(IGNORABLE_ERROR_TYPES[0]);
 

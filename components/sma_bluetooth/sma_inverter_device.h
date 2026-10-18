@@ -129,9 +129,19 @@ class SmaInverterDevice {
   uint32_t serial() const { return inv_data_.Serial; }
   bool is_data_fresh() const { return data_fresh_; }
   void clear_data_fresh() { data_fresh_ = false; }
+  void set_dynamic_interval(bool v) { dynamic_interval_ = v; }
+  bool dynamic_interval() const { return dynamic_interval_; }
+  uint32_t update_interval_ms() const {
+    if (dynamic_interval_) {
+      if (inv_data_.TotalPac > 50) {
+        return update_interval_ms_;
+      }
+      return std::max(update_interval_ms_ * 2, 300000u);
+    }
+    return update_interval_ms_;
+  }
   uint32_t last_poll_ms() const { return last_poll_ms_; }
   void set_last_poll_ms(uint32_t v) { last_poll_ms_ = v; }
-  uint32_t update_interval_ms() const { return update_interval_ms_; }
   uint32_t consecutive_errors() const { return consecutive_errors_; }
   void increment_errors() { consecutive_errors_++; }
   void reset_errors() { consecutive_errors_ = 0; }
@@ -169,6 +179,8 @@ class SmaInverterDevice {
   void set_total_generation_time_sensor(sensor::Sensor *s) { total_generation_time_ = s; }
   void set_wakeup_time_sensor(sensor::Sensor *s) { wakeup_time_ = s; }
   void set_last_event_code_sensor(sensor::Sensor *s) { last_event_code_sensor_ = s; }
+  void set_efficiency_sensor(sensor::Sensor *s) { efficiency_sensor_ = s; }
+  void set_insulation_resistance_sensor(sensor::Sensor *s) { insulation_resistance_sensor_ = s; }
 #ifdef USE_TEXT_SENSOR
   void set_inverter_status_sensor(text_sensor::TextSensor *s) { status_text_sensor_ = s; }
   void set_serial_number_sensor(text_sensor::TextSensor *s) { serial_number_ = s; }
@@ -284,6 +296,8 @@ class SmaInverterDevice {
   sensor::Sensor *total_generation_time_{nullptr};
   sensor::Sensor *wakeup_time_{nullptr};
   sensor::Sensor *last_event_code_sensor_{nullptr};
+  sensor::Sensor *efficiency_sensor_{nullptr};
+  sensor::Sensor *insulation_resistance_sensor_{nullptr};
 
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *status_text_sensor_{nullptr};
@@ -307,6 +321,7 @@ class SmaInverterDevice {
   bool is_fault_active_{false};
   uint8_t last_time_sync_day_{0};
   uint8_t event_query_counter_{0};
+  bool dynamic_interval_{false};
 
   // Flag: auto-sensors created (to avoid duplicating)
   bool auto_sensors_created_{false};

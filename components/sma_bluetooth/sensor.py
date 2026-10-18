@@ -54,6 +54,9 @@ CONF_INVERTER_STATUS = "inverter_status"
 CONF_LAST_EVENT = "last_event"
 CONF_LAST_EVENT_CODE = "last_event_code"
 CONF_INVERTER_FAULT = "inverter_fault"
+CONF_DYNAMIC_INTERVAL = "dynamic_interval"
+CONF_EFFICIENCY = "efficiency"
+CONF_INSULATION_RESISTANCE = "insulation_resistance"
 
 ICON_CURRENT_DC = "mdi:current-dc"
 ICON_SINE_WAVE = "mdi:sine-wave"
@@ -203,6 +206,19 @@ CONFIG_SCHEMA = cv.Schema(
             accuracy_decimals=0,
             entity_category="diagnostic",
         ),
+        cv.Optional(CONF_DYNAMIC_INTERVAL, default=False): cv.boolean,
+        cv.Optional(CONF_EFFICIENCY): sensor.sensor_schema(
+            unit_of_measurement=UNIT_PERCENT,
+            icon="mdi:percent-outline",
+            accuracy_decimals=1,
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_INSULATION_RESISTANCE): sensor.sensor_schema(
+            unit_of_measurement="kΩ",
+            icon="mdi:shield-alert-outline",
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
     }
 )
 
@@ -304,3 +320,14 @@ async def to_code(config):
     if CONF_LAST_EVENT_CODE in config:
         sens = await sensor.new_sensor(config[CONF_LAST_EVENT_CODE])
         cg.add(var.set_last_event_code_sensor(sens))
+
+    if CONF_DYNAMIC_INTERVAL in config:
+        cg.add(var.set_dynamic_interval(config[CONF_DYNAMIC_INTERVAL]))
+
+    if CONF_EFFICIENCY in config:
+        sens = await sensor.new_sensor(config[CONF_EFFICIENCY])
+        cg.add(var.set_efficiency_sensor(sens))
+
+    if CONF_INSULATION_RESISTANCE in config:
+        sens = await sensor.new_sensor(config[CONF_INSULATION_RESISTANCE])
+        cg.add(var.set_insulation_resistance_sensor(sens))
