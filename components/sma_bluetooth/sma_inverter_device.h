@@ -136,7 +136,8 @@ class SmaInverterDevice {
       if (inv_data_.TotalPac > 50) {
         return update_interval_ms_;
       }
-      return std::max(update_interval_ms_ * 2, 300000u);
+      uint32_t slow_interval = update_interval_ms_ * 2;
+      return (slow_interval > 300000UL) ? slow_interval : 300000UL;
     }
     return update_interval_ms_;
   }
