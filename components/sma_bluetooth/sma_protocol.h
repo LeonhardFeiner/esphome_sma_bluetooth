@@ -350,11 +350,11 @@ inline uint32_t get_attribute(const uint8_t *recptr) {
 }
 
 inline void get_version(uint32_t version, char *out) {
-  snprintf(out, 24, "%d.%d.%d.%c",
-           (version >> 24) & 0xFF,
-           (version >> 16) & 0xFF,
-           (version >> 8) & 0xFF,
-           'A' + (version & 0xFF));
+  snprintf(out, 24, "%u.%u.%u.%c",
+           (unsigned int)((version >> 24) & 0xFF),
+           (unsigned int)((version >> 16) & 0xFF),
+           (unsigned int)((version >> 8) & 0xFF),
+           (char)('A' + (version & 0xFF)));
 }
 
 inline uint8_t print_unix_time(char *buf, time_t t) {

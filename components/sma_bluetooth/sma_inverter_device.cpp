@@ -1249,7 +1249,7 @@ void SmaInverterDevice::create_auto_sensors(const std::string &prefix) {
   dev->set_device_id(fnv1a_hash(mac_string_));
   App.register_device(dev);
   ha_device_ = dev;
-  ESP_LOGI(TAG, "Registered sub-device '%s' (id=0x%08X)", prefix.c_str(), fnv1a_hash(mac_string_));
+  ESP_LOGI(TAG, "Registered sub-device '%s' (id=0x%08lX)", prefix.c_str(), (unsigned long)fnv1a_hash(mac_string_));
 #endif
 
   // Pre-compute entity_fields bitfields for each sensor type
