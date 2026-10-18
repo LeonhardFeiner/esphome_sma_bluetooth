@@ -84,8 +84,8 @@ bool SmaInverterDevice::poll(SmaBluetoothHub *hub) {
     if (rc == E_OK) {
       logged_on = true;
     } else if (configured_password_) {
-      // Do not clear configured password on transient logon failure,
-      // and do not fall back to default passwords ("0000"/"1111") which locks out the inverter.
+      // Local patch (2026-10-16): Do NOT clear configured password on transient logon failure,
+      // and do NOT fall back to default passwords ("0000"/"1111") which locks out the inverter.
       ESP_LOGW(TAG, "[%s] Configured password logon failed (rc=%d) - preserving password", mac_string_.c_str(), rc);
       hub->spp_disconnect();
       return false;
@@ -180,6 +180,27 @@ bool SmaInverterDevice::poll(SmaBluetoothHub *hub) {
     vTaskDelay(pdMS_TO_TICKS(hub->query_delay_ms()));
   }
 
+  // Time synchronization check (once per day when SNTP time is valid)
+  time_t now = time(nullptr);
+  if (now > MIN_VALID_TIME) {
+    struct tm tm_now;
+    localtime_r(&now, &tm_now);
+    uint8_t today = tm_now.tm_mday;
+    if (today != last_time_sync_day_) {
+      if (sync_inverter_time(hub)) {
+        last_time_sync_day_ = today;
+      }
+      vTaskDelay(pdMS_TO_TICKS(hub->query_delay_ms()));
+    }
+  }
+
+  // Periodic event/fault log query (every 4th cycle or immediately if fault active)
+  if (++event_query_counter_ >= 4 || is_fault_active_) {
+    event_query_counter_ = 0;
+    query_latest_events(hub);
+    vTaskDelay(pdMS_TO_TICKS(hub->query_delay_ms()));
+  }
+
   // Compute derived values
   handle_missing_values();
 
@@ -206,8 +227,8 @@ bool SmaInverterDevice::poll(SmaBluetoothHub *hub) {
 //  SMA protocol: initialize connection
 // ============================================================
 
-// Sender address for write_packet_header(), straight from the chip (BT MAC),
-// stored LSB first as expected on the wire.
+// Local patch: sender address for write_packet_header(), straight from the
+// chip (BT MAC), stored LSB first as on the wire.
 void SmaInverterDevice::load_local_bt_address_() {
   uint8_t mac[6];
   if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK) {
@@ -247,12 +268,14 @@ E_RC SmaInverterDevice::initialize_connection(SmaBluetoothHub *hub) {
     ESP_LOGD(TAG, "[%s] Init step 3 failed (no NetID response)", mac_string_.c_str());
     return E_INIT;
   }
-  // Verify that the echoed address matches our hardware address.
-  // Copying it blindly can poison every later session if a foreign packet
-  // or misaligned read occurs.
+  // Local patch: our own address is known (set in load_local_bt_address_()),
+  // so only cross-check the echoed one. Copying it blindly used to poison
+  // every later session: one misaligned read stored a shifted address, all
+  // following packets went out with the wrong sender, and the inverter
+  // ignored them until a reboot (2026-10-09).
   if (memcmp(esp_bt_address_, pkt_buf_ + 26, 6) != 0) {
     ESP_LOGW(TAG, "[%s] NetID response echoes %02X:%02X:%02X:%02X:%02X:%02X, not our "
-             "address -- reply for another BT master or misaligned read, retrying", mac_string_.c_str(),
+             "address -- reply for another BT master (SBFspot?) or a misaligned read, retrying", mac_string_.c_str(),
              pkt_buf_[31], pkt_buf_[30], pkt_buf_[29], pkt_buf_[28], pkt_buf_[27], pkt_buf_[26]);
     return E_INIT;
   }
@@ -482,8 +505,9 @@ E_RC SmaInverterDevice::get_inverter_data_cfl(SmaBluetoothHub *hub, uint32_t com
 
       // Parse records
       for (uint16_t ii = 41; ii < pkt_buf_pos_ - 3; ii += recordsize) {
-        // A 64-bit record (recordsize 16) only needs 16 bytes. The fixed "+20"
-        // guard dropped the last 16-byte record of the energy reply (MeteringDyWhOut / EToday).
+        // Local patch: a 64-bit record (recordsize 16) only needs 16 bytes. The
+        // old fixed "+20" guard dropped the last 16-byte record of the energy
+        // reply -- MeteringDyWhOut -- so EToday was never read (2026-10-09).
         if (ii + (recordsize == 16 ? 16u : 20u) > pkt_buf_pos_) break;
 
         uint8_t *recptr = pkt_buf_ + ii;
@@ -662,7 +686,7 @@ E_RC SmaInverterDevice::get_packet(SmaBluetoothHub *hub, const uint8_t exp_addr[
       if (hub->bt_read_timeout()) break;
     }
 
-    if (cnt < 18) return E_NODATA;
+    if (cnt < 18) return E_NODATA;  // local patch: was < 17, accepted a short header
 
     // Validate L1 checksum
     if (!((rd_buf_[0] ^ rd_buf_[1] ^ rd_buf_[2]) == rd_buf_[3])) {
@@ -757,6 +781,141 @@ bool SmaInverterDevice::get_bt_signal_strength(SmaBluetoothHub *hub) {
   hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
   get_packet(hub, inv_data_.btAddress, 4);
   disp_data_.BTSigStrength = ((float)rd_buf_[22] * 100.0f / 255.0f);
+  return true;
+}
+
+// ============================================================
+//  Inverter Real-Time Clock (RTC) synchronization via SNTP
+// ============================================================
+
+bool SmaInverterDevice::sync_inverter_time(SmaBluetoothHub *hub) {
+  time_t hosttime = time(nullptr);
+  if (hosttime < MIN_VALID_TIME) return false;
+
+  do {
+    pkt_id_++;
+    write_packet_header(pkt_buf_, 0x01, FFS_6);
+    write_packet(pkt_buf_, 0x10, 0xA0, 0, 0xFFFF, 0xFFFFFFFF);
+    write_32(pkt_buf_, 0xF000020A);
+    write_32(pkt_buf_, 0x00236D00);
+    write_32(pkt_buf_, 0x00236D00);
+    write_32(pkt_buf_, 0x00236D00);
+    write_32(pkt_buf_, 0);
+    write_32(pkt_buf_, 0);
+    write_32(pkt_buf_, 0);
+    write_32(pkt_buf_, 0);
+    write_32(pkt_buf_, 1);
+    write_32(pkt_buf_, 1);
+    write_packet_trailer(pkt_buf_);
+    write_packet_length(pkt_buf_);
+  } while (!is_crc_valid(pkt_buf_[pkt_buf_pos_ - 3], pkt_buf_[pkt_buf_pos_ - 2]));
+
+  hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
+
+  E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
+  if (rc != E_OK || !validate_checksum()) {
+    ESP_LOGD(TAG, "[%s] Time query failed: rc=%d", mac_string_.c_str(), rc);
+    return false;
+  }
+
+  time_t invCurrTime = (time_t)get_u32(pkt_buf_ + 45);
+  uint32_t tz = get_u32(pkt_buf_ + 57) & 0xFFFFFFFE;
+  uint32_t dst = get_u32(pkt_buf_ + 57) & 0x00000001;
+  uint32_t timesetCount = get_u32(pkt_buf_ + 61);
+
+  time_t diff = invCurrTime - hosttime;
+  ESP_LOGI(TAG, "[%s] Inverter time: %ld, host: %ld (diff: %ld s, tz=%u, dst=%u)",
+           mac_string_.c_str(), (long)invCurrTime, (long)hosttime, (long)diff, (unsigned)tz, (unsigned)dst);
+
+  // If clock differs by more than 60 seconds (and diff is reasonable, under 1 year)
+  if (std::abs(diff) > 60 && std::abs(diff) < 86400 * 365) {
+    ESP_LOGI(TAG, "[%s] Adjusting inverter time from %ld to host %ld...", mac_string_.c_str(), (long)invCurrTime, (long)hosttime);
+    do {
+      pkt_id_++;
+      write_packet_header(pkt_buf_, 0x01, FFS_6);
+      write_packet(pkt_buf_, 0x10, 0xA0, 0, 0xFFFF, 0xFFFFFFFF);
+      write_32(pkt_buf_, 0xF000020A);
+      write_32(pkt_buf_, 0x00236D00);
+      write_32(pkt_buf_, 0x00236D00);
+      write_32(pkt_buf_, 0x00236D00);
+      hosttime = time(nullptr);
+      write_32(pkt_buf_, (uint32_t)hosttime);
+      write_32(pkt_buf_, (uint32_t)hosttime);
+      write_32(pkt_buf_, (uint32_t)hosttime);
+      write_32(pkt_buf_, tz | dst);
+      write_32(pkt_buf_, timesetCount + 1);
+      write_32(pkt_buf_, 1);
+      write_packet_trailer(pkt_buf_);
+      write_packet_length(pkt_buf_);
+    } while (!is_crc_valid(pkt_buf_[pkt_buf_pos_ - 3], pkt_buf_[pkt_buf_pos_ - 2]));
+
+    hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
+    ESP_LOGI(TAG, "[%s] Inverter clock synchronized successfully", mac_string_.c_str());
+  }
+  return true;
+}
+
+// ============================================================
+//  SMA Event / Fault Log Query (ArchiveEventData 0x70100200)
+// ============================================================
+
+bool SmaInverterDevice::query_latest_events(SmaBluetoothHub *hub) {
+  time_t now = time(nullptr);
+  if (now < MIN_VALID_TIME) return false;
+
+  time_t startTime = now - (7 * 86400);  // Look back 7 days
+  time_t endTime = now + 86400;
+
+  do {
+    pkt_id_++;
+    write_packet_header(pkt_buf_, 0x01, inv_data_.btAddress);
+    write_packet(pkt_buf_, 0x09, 0xE0, 0, inv_data_.SUSyID, inv_data_.Serial);
+    write_32(pkt_buf_, 0x70100200);  // UG_USER ArchiveEventData command
+    write_32(pkt_buf_, (uint32_t)startTime);
+    write_32(pkt_buf_, (uint32_t)endTime);
+    write_packet_trailer(pkt_buf_);
+    write_packet_length(pkt_buf_);
+  } while (!is_crc_valid(pkt_buf_[pkt_buf_pos_ - 3], pkt_buf_[pkt_buf_pos_ - 2]));
+
+  hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
+
+  uint16_t pkt_count = 0;
+  int32_t newest_ts = 0;
+  uint16_t newest_code = 0;
+  uint16_t newest_flags = 0;
+  bool found_event = false;
+
+  do {
+    E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
+    if (rc != E_OK || !validate_checksum()) {
+      ESP_LOGD(TAG, "[%s] Event query get_packet rc=%d", mac_string_.c_str(), rc);
+      return false;
+    }
+    pkt_count = get_u16(pkt_buf_ + 25);
+    uint16_t rcv_pkt_id = get_u16(pkt_buf_ + 27) & 0x7FFF;
+    if (pkt_id_ != rcv_pkt_id) continue;
+
+    for (uint16_t x = 41; x + sizeof(SmaEventData) <= pkt_buf_pos_ - 3; x += sizeof(SmaEventData)) {
+      const auto *ev = reinterpret_cast<const SmaEventData *>(pkt_buf_ + x);
+      if (ev->date_time != 0 && ev->date_time >= newest_ts) {
+        newest_ts = ev->date_time;
+        newest_code = ev->event_code;
+        newest_flags = ev->event_flags;
+        found_event = true;
+      }
+    }
+  } while (pkt_count > 0);
+
+  if (found_event) {
+    last_event_code_val_ = newest_code;
+    uint8_t category = (newest_flags >> 14) & 3;
+    uint8_t event_type = newest_flags & 7;
+    last_event_str_ = lookup_event_code(newest_code, category);
+    // Category 2 = Error, event_type 0 = Incoming (active fault)
+    is_fault_active_ = (category == 2 && event_type == 0);
+    ESP_LOGD(TAG, "[%s] Latest event: Code %u (%s), category=%u, type=%u, fault_active=%d",
+             mac_string_.c_str(), newest_code, last_event_str_.c_str(), category, event_type, is_fault_active_);
+  }
   return true;
 }
 
@@ -1012,6 +1171,7 @@ bool SmaInverterDevice::publish_sensors() {
                  lookup_status_code(inv_data_.DeviceClass));
   publish_sensor(inverter_time_sensor_, inv_data_.InverterTimestamp);
   publish_sensor(mac_address_sensor_, mac_string_);
+  publish_sensor(last_event_sensor_, last_event_str_);
 #endif
 #ifdef USE_BINARY_SENSOR
   // Only publish grid connection if relay status was actually returned
@@ -1019,7 +1179,9 @@ bool SmaInverterDevice::publish_sensors() {
   if (inv_data_.GridRelay != 0) {
     publish_sensor(grid_relay_, inv_data_.GridRelay == 51);
   }
+  publish_sensor(inverter_fault_sensor_, is_fault_active_);
 #endif
+  publish_sensor(last_event_code_sensor_, (float)last_event_code_val_);
   return sensors_created;
 }
 
@@ -1126,6 +1288,8 @@ void SmaInverterDevice::create_auto_sensors(const std::string &prefix) {
               duration_fields, sensor::STATE_CLASS_TOTAL, 0);
   make_sensor(&total_generation_time_, "Feed-in Time",
               duration_fields, sensor::STATE_CLASS_TOTAL, 0);
+  make_sensor(&last_event_code_sensor_, "Last Event Code",
+              diag_fields, sensor::STATE_CLASS_NONE, 0);
 
   // Text sensors (diagnostic category)
 #ifdef USE_TEXT_SENSOR
@@ -1149,10 +1313,11 @@ void SmaInverterDevice::create_auto_sensors(const std::string &prefix) {
     make_ts(&device_type_, "Device Type", diag_fields);
     make_ts(&device_class_, "Device Class", diag_fields);
     make_ts(&mac_address_sensor_, "MAC Address", diag_fields);
+    make_ts(&last_event_sensor_, "Last Event", diag_fields);
   }
 #endif
 
-  // Binary sensor (grid relay)
+  // Binary sensor (grid relay & fault active)
 #ifdef USE_BINARY_SENSOR
   if (grid_relay_ == nullptr) {
     uint32_t relay_fields = sma_entity_fields(SMA_DC_IDX_POWER, 0, SMA_ICON_IDX_RELAY);
@@ -1164,6 +1329,17 @@ void SmaInverterDevice::create_auto_sensors(const std::string &prefix) {
     App.register_binary_sensor(s);
     grid_relay_ = s;
     ESP_LOGD(TAG, "  BinarySensor 'Grid Connection' key=0x%08X", s->get_object_id_hash());
+  }
+  if (inverter_fault_sensor_ == nullptr) {
+    uint32_t fault_fields = sma_entity_fields(SMA_DC_IDX_POWER, 0, SMA_ICON_IDX_FLASH, 2);
+#ifdef USE_DEVICES
+    auto *s = new DynamicBinarySensor("Fault Active", fault_fields, ha_device_);
+#else
+    auto *s = new DynamicBinarySensor("Fault Active", fault_fields);
+#endif
+    App.register_binary_sensor(s);
+    inverter_fault_sensor_ = s;
+    ESP_LOGD(TAG, "  BinarySensor 'Fault Active' key=0x%08X", s->get_object_id_hash());
   }
 #endif
 

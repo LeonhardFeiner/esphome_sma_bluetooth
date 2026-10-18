@@ -114,7 +114,9 @@ class SmaInverterDevice {
 
   // Create auto-sensors for autodiscovery mode
   void create_auto_sensors(const std::string &prefix);
-  // Mark auto-sensors as created (e.g. for YAML-configured inverters that already have explicit sensors)
+  // Local patch: YAML-configured inverters (sensor: platform) already have
+  // their own sensors; mark auto-sensors as done so the first poll doesn't
+  // create a duplicate set and trigger the hub's "reboot for HA" path.
   void skip_auto_sensors() { auto_sensors_created_ = true; }
 
   // Handle missing values (derive power from V*I)
@@ -166,6 +168,7 @@ class SmaInverterDevice {
   void set_today_generation_time_sensor(sensor::Sensor *s) { today_generation_time_ = s; }
   void set_total_generation_time_sensor(sensor::Sensor *s) { total_generation_time_ = s; }
   void set_wakeup_time_sensor(sensor::Sensor *s) { wakeup_time_ = s; }
+  void set_last_event_code_sensor(sensor::Sensor *s) { last_event_code_sensor_ = s; }
 #ifdef USE_TEXT_SENSOR
   void set_inverter_status_sensor(text_sensor::TextSensor *s) { status_text_sensor_ = s; }
   void set_serial_number_sensor(text_sensor::TextSensor *s) { serial_number_ = s; }
@@ -173,9 +176,11 @@ class SmaInverterDevice {
   void set_device_type_sensor(text_sensor::TextSensor *s) { device_type_ = s; }
   void set_device_class_sensor(text_sensor::TextSensor *s) { device_class_ = s; }
   void set_inverter_time_sensor(text_sensor::TextSensor *s) { inverter_time_sensor_ = s; }
+  void set_last_event_sensor(text_sensor::TextSensor *s) { last_event_sensor_ = s; }
 #endif
 #ifdef USE_BINARY_SENSOR
   void set_grid_relay_sensor(binary_sensor::BinarySensor *s) { grid_relay_ = s; }
+  void set_inverter_fault_sensor(binary_sensor::BinarySensor *s) { inverter_fault_sensor_ = s; }
 #endif
 
  protected:
@@ -187,6 +192,8 @@ class SmaInverterDevice {
   E_RC get_inverter_data_cfl(SmaBluetoothHub *hub, uint32_t command, uint32_t first, uint32_t last);
   E_RC get_packet(SmaBluetoothHub *hub, const uint8_t exp_addr[6], int wait4_command);
   bool get_bt_signal_strength(SmaBluetoothHub *hub);
+  bool sync_inverter_time(SmaBluetoothHub *hub);
+  bool query_latest_events(SmaBluetoothHub *hub);
 
   // Packet building helpers
   void write_packet_header(uint8_t *buf, uint16_t control, const uint8_t *dest);
@@ -214,7 +221,7 @@ class SmaInverterDevice {
 
   // Per-inverter identity
   uint8_t bt_address_[6]{};
-  uint8_t esp_bt_address_[6]{};  // Hardware BT MAC, LSB first
+  uint8_t esp_bt_address_[6]{};  // our BT MAC, LSB first (local patch: read from chip, not learned)
   void load_local_bt_address_();
   char    password_[13]{};       // 12 chars + null
   bool    password_set_{false};
@@ -276,6 +283,7 @@ class SmaInverterDevice {
   sensor::Sensor *today_generation_time_{nullptr};
   sensor::Sensor *total_generation_time_{nullptr};
   sensor::Sensor *wakeup_time_{nullptr};
+  sensor::Sensor *last_event_code_sensor_{nullptr};
 
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *status_text_sensor_{nullptr};
@@ -285,11 +293,20 @@ class SmaInverterDevice {
   text_sensor::TextSensor *device_class_{nullptr};
   text_sensor::TextSensor *inverter_time_sensor_{nullptr};
   text_sensor::TextSensor *mac_address_sensor_{nullptr};
+  text_sensor::TextSensor *last_event_sensor_{nullptr};
 #endif
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *grid_relay_{nullptr};
+  binary_sensor::BinarySensor *inverter_fault_sensor_{nullptr};
 #endif
+
+  // Event & time sync state
+  uint16_t last_event_code_val_{0};
+  std::string last_event_str_{"None"};
+  bool is_fault_active_{false};
+  uint8_t last_time_sync_day_{0};
+  uint8_t event_query_counter_{0};
 
   // Flag: auto-sensors created (to avoid duplicating)
   bool auto_sensors_created_{false};

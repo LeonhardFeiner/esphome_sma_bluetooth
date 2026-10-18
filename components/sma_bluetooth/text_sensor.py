@@ -13,6 +13,7 @@ CONF_SOFTWARE_VERSION = "software_version"
 CONF_DEVICE_TYPE = "device_type"
 CONF_DEVICE_CLASS = "device_class"
 CONF_INVERTER_TIME = "inverter_time"
+CONF_LAST_EVENT = "last_event"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -25,6 +26,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_DEVICE_TYPE): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_DEVICE_CLASS): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_INVERTER_TIME): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_LAST_EVENT): text_sensor.text_sensor_schema(),
     }
 )
 
@@ -61,3 +63,7 @@ async def to_code(config):
     if CONF_INVERTER_TIME in config:
         sens = await text_sensor.new_text_sensor(config[CONF_INVERTER_TIME])
         cg.add(var.set_inverter_time_sensor(sens))
+
+    if CONF_LAST_EVENT in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_LAST_EVENT])
+        cg.add(var.set_last_event_sensor(sens))
