@@ -655,19 +655,19 @@ void SmaBluetoothHub::bt_task_loop() {
           device->publish_unavailable();
         }
         if (device->consecutive_errors() <= 3) {
-          ESP_LOGD(TTAG, "Poll failed for %s (errors: %u)",
-                   device->mac_string().c_str(), device->consecutive_errors());
+          ESP_LOGD(TTAG, "Poll failed for %s (errors: %lu)",
+                   device->mac_string().c_str(), (unsigned long)device->consecutive_errors());
         } else {
-          ESP_LOGW(TTAG, "Poll failed for %s (errors: %u)",
-                   device->mac_string().c_str(), device->consecutive_errors());
+          ESP_LOGW(TTAG, "Poll failed for %s (errors: %lu)",
+                   device->mac_string().c_str(), (unsigned long)device->consecutive_errors());
         }
 
         // If BT stack appears stuck (many consecutive failures), reboot.
         // HCI command timeouts and stale ACL links can put the stack in an
         // unrecoverable state that only a full reboot can fix.
         if (device->consecutive_errors() >= 10) {
-          ESP_LOGE(TTAG, "BT stack appears stuck after %u failures — rebooting",
-                   device->consecutive_errors());
+          ESP_LOGE(TTAG, "BT stack appears stuck after %lu failures — rebooting",
+                   (unsigned long)device->consecutive_errors());
           vTaskDelay(pdMS_TO_TICKS(1000));
           esp_restart();
         }
@@ -1011,7 +1011,7 @@ void SmaBluetoothHub::handle_history_streaming() {
   int days = history_days_;
   std::string mac = history_mac_;
 
-  ESP_LOGI(TTAG, "Starting history stream (%d days) to client socket %d", days, sock);
+  ESP_LOGI(TAG, "Starting history stream (%d days) to client socket %d", days, sock);
 
   time_t now = time(nullptr);
   if (now > MIN_VALID_TIME) {
@@ -1036,7 +1036,7 @@ void SmaBluetoothHub::handle_history_streaming() {
 
   pending_history_sock_ = -1;
   xSemaphoreGive(history_done_sem_);
-  ESP_LOGI(TTAG, "History stream completed");
+  ESP_LOGI(TAG, "History stream completed");
 }
 
 }  // namespace sma_bluetooth
