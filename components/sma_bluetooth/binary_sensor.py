@@ -8,6 +8,7 @@ SmaInverterDevice = sma_bluetooth_ns.class_("SmaInverterDevice")
 
 CONF_MAC_ADDRESS = "mac_address"
 CONF_GRID_RELAY = "grid_relay"
+CONF_INVERTER_FAULT = "inverter_fault"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -16,6 +17,10 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_MAC_ADDRESS): cv.string,
         cv.Optional(CONF_GRID_RELAY): binary_sensor.binary_sensor_schema(
             icon="mdi:transmission-tower",
+        ),
+        cv.Optional(CONF_INVERTER_FAULT): binary_sensor.binary_sensor_schema(
+            device_class="problem",
+            icon="mdi:alert-circle",
         ),
     }
 )
@@ -31,3 +36,7 @@ async def to_code(config):
     if CONF_GRID_RELAY in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_GRID_RELAY])
         cg.add(var.set_grid_relay_sensor(sens))
+
+    if CONF_INVERTER_FAULT in config:
+        sens = await binary_sensor.new_binary_sensor(config[CONF_INVERTER_FAULT])
+        cg.add(var.set_inverter_fault_sensor(sens))

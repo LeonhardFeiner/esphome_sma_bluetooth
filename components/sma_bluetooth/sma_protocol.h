@@ -660,6 +660,53 @@ inline std::string lookup_status_code(uint32_t code) {
   return "Code " + std::to_string(code);
 }
 
+// ---------------------------------------------------------------------------
+//  SMA Event Data structure (from SBFspot EventData.h)
+// ---------------------------------------------------------------------------
+#pragma pack(push, 1)
+struct SmaEventData {
+  int32_t  date_time;
+  uint16_t entry_id;
+  uint16_t susy_id;
+  uint32_t ser_no;
+  uint16_t event_code;
+  uint16_t event_flags;
+  uint32_t group;
+  uint32_t ulong1;
+  uint32_t tag;
+  uint32_t counter;
+  char     args[16];
+};
+#pragma pack(pop)
+
+struct EventCodeEntry {
+  uint16_t code;
+  const char *description;
+};
+
+static const EventCodeEntry EVENT_CODE_TABLE[] = {
+    {0, "No Event"},
+    {8, "Waiting for grid voltage / Grid failure"},
+    {33, "Unstable operation (DC side)"},
+    {35, "Insulation resistance (Riso)"},
+    {38, "Overcurrent"},
+    {39, "Waiting for DC start conditions"},
+    {10010, "Restart diagnosis system"},
+    {10104, "Parameter 'Set user password' set successfully"},
+    {10105, "Setting parameter 'Set user password' failed"},
+    {10108, "Time adjusted / old time"},
+    {10109, "Time adjusted / new time"},
+};
+static const size_t EVENT_CODE_TABLE_SIZE = sizeof(EVENT_CODE_TABLE) / sizeof(EVENT_CODE_TABLE[0]);
+
+inline std::string lookup_event_code(uint16_t code, uint8_t category = 0) {
+  for (size_t i = 0; i < EVENT_CODE_TABLE_SIZE; i++) {
+    if (EVENT_CODE_TABLE[i].code == code) return std::string(EVENT_CODE_TABLE[i].description);
+  }
+  const char *cat_str = (category == 2) ? "Error" : (category == 1) ? "Warning" : "Info";
+  return std::string(cat_str) + " " + std::to_string(code);
+}
+
 // Query type tables — which data types to query in each cycle
 static const getInverterDataType FAST_QUERY_TYPES[] = {
     SpotDCPower, SpotDCVoltage, SpotACPower,

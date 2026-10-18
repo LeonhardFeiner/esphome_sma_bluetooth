@@ -1,6 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import sensor
+from esphome.components import sensor, binary_sensor, text_sensor
 from esphome.const import (
     CONF_ACTIVE_POWER,
     CONF_CURRENT,
@@ -49,6 +49,11 @@ CONF_BT_SIGNAL_STRENGTH = "bt_signal_strength"
 CONF_TODAY_GENERATION_TIME = "today_generation_time"
 CONF_TOTAL_GENERATION_TIME = "total_generation_time"
 CONF_WAKEUP_TIME = "wakeup_time"
+CONF_GRID_RELAY = "grid_relay"
+CONF_INVERTER_STATUS = "inverter_status"
+CONF_LAST_EVENT = "last_event"
+CONF_LAST_EVENT_CODE = "last_event_code"
+CONF_INVERTER_FAULT = "inverter_fault"
 
 ICON_CURRENT_DC = "mdi:current-dc"
 ICON_SINE_WAVE = "mdi:sine-wave"
@@ -180,6 +185,24 @@ CONFIG_SCHEMA = cv.Schema(
             icon=ICON_CLOCK,
             device_class=DEVICE_CLASS_TIMESTAMP,
         ),
+        cv.Optional(CONF_GRID_RELAY): binary_sensor.binary_sensor_schema(
+            icon="mdi:transmission-tower",
+        ),
+        cv.Optional(CONF_INVERTER_FAULT): binary_sensor.binary_sensor_schema(
+            device_class="problem",
+            icon="mdi:alert-circle",
+        ),
+        cv.Optional(CONF_INVERTER_STATUS): text_sensor.text_sensor_schema(
+            icon="mdi:solar-power",
+        ),
+        cv.Optional(CONF_LAST_EVENT): text_sensor.text_sensor_schema(
+            icon="mdi:bell-alert",
+        ),
+        cv.Optional(CONF_LAST_EVENT_CODE): sensor.sensor_schema(
+            icon="mdi:numeric",
+            accuracy_decimals=0,
+            entity_category="diagnostic",
+        ),
     }
 )
 
@@ -261,3 +284,23 @@ async def to_code(config):
             if sensor_type in pv_config:
                 sens = await sensor.new_sensor(pv_config[sensor_type])
                 cg.add(getattr(var, f"set_{sensor_type}_sensor_pv")(i, sens))
+
+    if CONF_GRID_RELAY in config:
+        sens = await binary_sensor.new_binary_sensor(config[CONF_GRID_RELAY])
+        cg.add(var.set_grid_relay_sensor(sens))
+
+    if CONF_INVERTER_FAULT in config:
+        sens = await binary_sensor.new_binary_sensor(config[CONF_INVERTER_FAULT])
+        cg.add(var.set_inverter_fault_sensor(sens))
+
+    if CONF_INVERTER_STATUS in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_INVERTER_STATUS])
+        cg.add(var.set_inverter_status_sensor(sens))
+
+    if CONF_LAST_EVENT in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_LAST_EVENT])
+        cg.add(var.set_last_event_sensor(sens))
+
+    if CONF_LAST_EVENT_CODE in config:
+        sens = await sensor.new_sensor(config[CONF_LAST_EVENT_CODE])
+        cg.add(var.set_last_event_code_sensor(sens))
