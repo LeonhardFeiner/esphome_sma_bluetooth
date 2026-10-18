@@ -17,6 +17,8 @@
 
 #include <string>
 #include <vector>
+#include <lwip/sockets.h>
+#include <lwip/netdb.h>
 
 namespace esphome {
 namespace sma_bluetooth {
@@ -88,6 +90,9 @@ class SmaBluetoothHub : public Component {
   const std::vector<std::string> &get_passwords() const { return passwords_; }
   uint32_t query_delay_ms() const { return query_delay_ms_; }
 
+  // Historical data streaming over HTTP
+  void stream_history_request(int client_sock, int days, const std::string &mac);
+
  protected:
   // Static callbacks (BT stack context)
   static void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
@@ -151,6 +156,15 @@ class SmaBluetoothHub : public Component {
   // Reboot deferral: wait for a full poll cycle to complete before rebooting
   bool reboot_pending_{false};
   volatile bool poll_cycle_complete_{false};  // set by BT task after one full pass
+
+  // HTTP server for streaming history
+  static void http_server_task(void *param);
+  void handle_history_streaming();
+  TaskHandle_t http_server_task_handle_{nullptr};
+  SemaphoreHandle_t history_done_sem_{nullptr};
+  volatile int pending_history_sock_{-1};
+  int history_days_{1};
+  std::string history_mac_;
 
   // Singleton instance for static callbacks
   static SmaBluetoothHub *instance_;

@@ -207,6 +207,7 @@ class SmaInverterDevice {
   bool get_bt_signal_strength(SmaBluetoothHub *hub);
   bool sync_inverter_time(SmaBluetoothHub *hub);
   bool query_latest_events(SmaBluetoothHub *hub);
+  bool stream_history_data(SmaBluetoothHub *hub, int sock, time_t start_time, time_t end_time);
 
   // Packet building helpers
   void write_packet_header(uint8_t *buf, uint16_t control, const uint8_t *dest);

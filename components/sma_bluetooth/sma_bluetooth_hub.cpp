@@ -57,6 +57,12 @@ void SmaBluetoothHub::setup() {
   xTaskCreatePinnedToCore(bt_task_entry, "sma_bt", 8192, this, 2,
                           (TaskHandle_t *)&bt_task_handle_, 0);
   ESP_LOGI(TAG, "BT task launched");
+
+  // Start lightweight HTTP server for on-demand history streaming on core 1
+  history_done_sem_ = xSemaphoreCreateBinary();
+  xTaskCreatePinnedToCore(http_server_task, "sma_http", 4096, this, 1,
+                          (TaskHandle_t *)&http_server_task_handle_, 1);
+  ESP_LOGI(TAG, "History HTTP server task launched on port 8234");
 }
 
 void SmaBluetoothHub::loop() {
@@ -577,6 +583,11 @@ void SmaBluetoothHub::bt_task_loop() {
   bool nvs_passwords_saved = false;
 
   while (!stop_task_) {
+    // Service on-demand historical data streaming request
+    if (pending_history_sock_ >= 0) {
+      handle_history_streaming();
+    }
+
     // External pause gate (see set_paused())
     if (paused_) {
       vTaskDelay(pdMS_TO_TICKS(5000));
@@ -876,6 +887,156 @@ void SmaBluetoothHub::pre_create_devices_() {
     ESP_LOGI(TAG, "Pre-created device + sensors: '%s' (%s)",
              prefix.c_str(), cfg->mac_string.c_str());
   }
+}
+
+// ============================================================
+//  HTTP Server & Historical Data Streaming
+// ============================================================
+
+void SmaBluetoothHub::http_server_task(void *param) {
+  auto *hub = static_cast<SmaBluetoothHub *>(param);
+  int server_sock = -1;
+  while (!hub->stop_task_) {
+    server_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (server_sock < 0) {
+      vTaskDelay(pdMS_TO_TICKS(2000));
+      continue;
+    }
+    int opt = 1;
+    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in dest_addr {};
+    dest_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(8234);
+
+    if (bind(server_sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) != 0) {
+      ESP_LOGW("sma_http", "Failed to bind HTTP socket on port 8234, retrying in 2s...");
+      close(server_sock);
+      server_sock = -1;
+      vTaskDelay(pdMS_TO_TICKS(2000));
+      continue;
+    }
+    if (listen(server_sock, 2) != 0) {
+      close(server_sock);
+      server_sock = -1;
+      vTaskDelay(pdMS_TO_TICKS(2000));
+      continue;
+    }
+    ESP_LOGI("sma_http", "SMA History HTTP server listening on port 8234");
+    break;
+  }
+
+  while (!hub->stop_task_ && server_sock >= 0) {
+    struct sockaddr_in source_addr {};
+    socklen_t addr_len = sizeof(source_addr);
+    int client_sock = accept(server_sock, (struct sockaddr *)&source_addr, &addr_len);
+    if (client_sock < 0) {
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
+
+    struct timeval tv {};
+    tv.tv_sec = 15;
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(client_sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    char req_buf[256];
+    int len = recv(client_sock, req_buf, sizeof(req_buf) - 1, 0);
+    if (len <= 0) {
+      close(client_sock);
+      continue;
+    }
+    req_buf[len] = '\0';
+
+    if (strncmp(req_buf, "GET /history", 12) == 0 || strncmp(req_buf, "GET /api/history", 16) == 0) {
+      int days = 1;
+      char *days_ptr = strstr(req_buf, "days=");
+      if (days_ptr) {
+        days = atoi(days_ptr + 5);
+        if (days < 1) days = 1;
+        if (days > 90) days = 90;
+      }
+      std::string req_mac;
+      char *mac_ptr = strstr(req_buf, "mac=");
+      if (mac_ptr) {
+        char mac_str[18]{};
+        int mi = 0;
+        const char *p = mac_ptr + 4;
+        while (*p && *p != ' ' && *p != '&' && *p != '\r' && *p != '\n' && mi < 17) {
+          mac_str[mi++] = *p++;
+        }
+        mac_str[mi] = '\0';
+        req_mac = std::string(mac_str);
+      }
+
+      static const char *HDR =
+          "HTTP/1.1 200 OK\r\n"
+          "Content-Type: text/csv; charset=utf-8\r\n"
+          "Content-Disposition: attachment; filename=\"sma_history.csv\"\r\n"
+          "Connection: close\r\n"
+          "\r\n"
+          "timestamp,datetime,inverter_mac,total_kwh,power_w\r\n";
+      send(client_sock, HDR, strlen(HDR), 0);
+
+      hub->stream_history_request(client_sock, days, req_mac);
+    } else {
+      static const char *HELP =
+          "HTTP/1.1 200 OK\r\n"
+          "Content-Type: text/plain; charset=utf-8\r\n"
+          "Connection: close\r\n"
+          "\r\n"
+          "SMA Bluetooth Inverter History Streamer\r\n"
+          "Usage: GET /history?days=N[&mac=XX:XX:XX:XX:XX:XX] (N=1..90)\r\n";
+      send(client_sock, HELP, strlen(HELP), 0);
+    }
+    close(client_sock);
+  }
+  if (server_sock >= 0) {
+    close(server_sock);
+  }
+  vTaskDelete(nullptr);
+}
+
+void SmaBluetoothHub::stream_history_request(int client_sock, int days, const std::string &mac) {
+  pending_history_sock_ = client_sock;
+  history_days_ = days;
+  history_mac_ = mac;
+  xSemaphoreTake(history_done_sem_, 0);
+  xSemaphoreTake(history_done_sem_, pdMS_TO_TICKS(600000));
+}
+
+void SmaBluetoothHub::handle_history_streaming() {
+  int sock = pending_history_sock_;
+  int days = history_days_;
+  std::string mac = history_mac_;
+
+  ESP_LOGI(TTAG, "Starting history stream (%d days) to client socket %d", days, sock);
+
+  time_t now = time(nullptr);
+  if (now > MIN_VALID_TIME) {
+    time_t start_time = now - ((time_t)days * 86400);
+    struct tm tm_start;
+    localtime_r(&start_time, &tm_start);
+    tm_start.tm_hour = 0;
+    tm_start.tm_min = 0;
+    tm_start.tm_sec = 0;
+    start_time = mktime(&tm_start);
+
+    for (auto *device : devices_) {
+      if (!mac.empty() && !same_mac_(mac, device->mac_string())) {
+        continue;
+      }
+      device->stream_history_data(this, sock, start_time, now);
+    }
+  } else {
+    static const char *ERR = "# Inverter or ESP clock not synchronized yet\r\n";
+    send(sock, ERR, strlen(ERR), 0);
+  }
+
+  pending_history_sock_ = -1;
+  xSemaphoreGive(history_done_sem_);
+  ESP_LOGI(TTAG, "History stream completed");
 }
 
 }  // namespace sma_bluetooth

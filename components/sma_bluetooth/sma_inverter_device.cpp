@@ -1378,5 +1378,119 @@ void SmaInverterDevice::create_auto_sensors(const std::string &prefix) {
            prefix.c_str(), (int)App.get_sensors().size());
 }
 
+// ============================================================
+//  SMA Historical 5-Minute Ring Buffer Streamer (0x70000200)
+// ============================================================
+
+bool SmaInverterDevice::stream_history_data(SmaBluetoothHub *hub, int sock, time_t start_time, time_t end_time) {
+  ESP_LOGI(TAG, "[%s] Starting history stream from %ld to %ld", mac_string_.c_str(), (long)start_time, (long)end_time);
+
+  if (!hub->spp_connect(bt_address_)) {
+    ESP_LOGW(TAG, "[%s] SPP connect failed for history stream", mac_string_.c_str());
+    return false;
+  }
+  pkt_id_ = 1;
+  hub->bt_flush_rx();
+  if (initialize_connection(hub) != E_OK) {
+    hub->spp_disconnect();
+    return false;
+  }
+
+  bool logged_on = false;
+  if (password_set_) {
+    if (logon(hub, password_, USERGROUP) == E_OK) logged_on = true;
+  }
+  if (!logged_on) {
+    for (const auto &pw : hub->get_passwords()) {
+      if (logon(hub, pw.c_str(), USERGROUP) == E_OK) {
+        set_working_password(pw);
+        logged_on = true;
+        break;
+      }
+      hub->spp_disconnect();
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      if (!hub->spp_connect(bt_address_)) return false;
+      pkt_id_ = 1;
+      hub->bt_flush_rx();
+      if (initialize_connection(hub) != E_OK) return false;
+    }
+  }
+
+  if (!logged_on) {
+    ESP_LOGE(TAG, "[%s] Logon failed for history stream", mac_string_.c_str());
+    hub->spp_disconnect();
+    return false;
+  }
+
+  // Iterate day by day
+  uint64_t prev_wh = 0;
+  time_t prev_rec_time = 0;
+  for (time_t cur = start_time; cur <= end_time; cur += 86400) {
+    time_t day_start = cur - 600;
+    time_t day_end = cur + 86100;
+
+    do {
+      pkt_id_++;
+      write_packet_header(pkt_buf_, 0x01, inv_data_.btAddress);
+      write_packet(pkt_buf_, 0x09, 0xE0, 0, inv_data_.SUSyID, inv_data_.Serial);
+      write_32(pkt_buf_, 0x70000200);  // ArchiveDayData
+      write_32(pkt_buf_, (uint32_t)day_start);
+      write_32(pkt_buf_, (uint32_t)day_end);
+      write_packet_trailer(pkt_buf_);
+      write_packet_length(pkt_buf_);
+    } while (!is_crc_valid(pkt_buf_[pkt_buf_pos_ - 3], pkt_buf_[pkt_buf_pos_ - 2]));
+
+    hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
+
+    uint16_t pkt_count = 0;
+    do {
+      E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
+      if (rc != E_OK || !validate_checksum()) break;
+
+      pkt_count = get_u16(pkt_buf_ + 25);
+      uint16_t rcv_pkt_id = get_u16(pkt_buf_ + 27) & 0x7FFF;
+      if (pkt_id_ != rcv_pkt_id) continue;
+
+      for (int x = 41; x < (pkt_buf_pos_ - 3); x += 12) {
+        if (x + 12 > pkt_buf_pos_ - 3) break;
+        time_t rec_time = (time_t)get_u32(pkt_buf_ + x);
+        uint64_t total_wh = get_u64(pkt_buf_ + x + 4);
+        if (is_NaN(total_wh) || rec_time == 0) continue;
+
+        float p_watt = 0.0f;
+        if (prev_wh > 0 && total_wh >= prev_wh && prev_rec_time > 0 && rec_time > prev_rec_time) {
+          uint32_t dt = (uint32_t)(rec_time - prev_rec_time);
+          if (dt >= 60 && dt <= 900) {
+            p_watt = (float)(total_wh - prev_wh) * (3600.0f / (float)dt);
+          }
+        }
+        prev_wh = total_wh;
+        prev_rec_time = rec_time;
+
+        struct tm r_tm;
+        localtime_r(&rec_time, &r_tm);
+        char time_str[24];
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &r_tm);
+
+        char line[128];
+        int len = snprintf(line, sizeof(line), "%ld,%s,%s,%.3f,%.0f\r\n",
+                           (long)rec_time, time_str, mac_string_.c_str(),
+                           (float)total_wh / 1000.0f, p_watt);
+        if (send(sock, line, len, 0) < 0) {
+          ESP_LOGW(TAG, "[%s] Client closed connection during history stream", mac_string_.c_str());
+          logoff(hub);
+          hub->spp_disconnect();
+          return false;
+        }
+      }
+    } while (pkt_count > 0);
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+
+  logoff(hub);
+  hub->spp_disconnect();
+  return true;
+}
+
 }  // namespace sma_bluetooth
 }  // namespace esphome
