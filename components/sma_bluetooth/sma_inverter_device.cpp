@@ -285,6 +285,7 @@ E_RC SmaInverterDevice::initialize_connection(SmaBluetoothHub *hub) {
            esp_bt_address_[2], esp_bt_address_[1], esp_bt_address_[0]);
 
   // Step 4: Query inverter identity
+  hub->bt_flush_rx();
   pkt_id_++;
   write_packet_header(pkt_buf_, 0x01, FFS_6);
   write_packet(pkt_buf_, 0x09, 0xA0, 0, 0xFFFF, 0xFFFFFFFF);
@@ -1407,6 +1408,7 @@ bool SmaInverterDevice::stream_history_data(SmaBluetoothHub *hub, int sock, time
   send(sock, msg, strlen(msg), 0);
 
   bool logged_on = false;
+  hub->bt_flush_rx();
   if (password_set_) {
     if (logon(hub, password_, USERGROUP) == E_OK) logged_on = true;
   }
@@ -1535,6 +1537,7 @@ bool SmaInverterDevice::stream_daily_history_data(SmaBluetoothHub *hub, int sock
   send(sock, msg, strlen(msg), 0);
 
   bool logged_on = false;
+  hub->bt_flush_rx();
   if (password_set_) {
     if (logon(hub, password_, USERGROUP) == E_OK) logged_on = true;
   }
