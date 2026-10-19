@@ -941,13 +941,30 @@ void SmaBluetoothHub::http_server_task(void *param) {
     setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(client_sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    char req_buf[256];
-    int len = recv(client_sock, req_buf, sizeof(req_buf) - 1, 0);
-    if (len <= 0) {
+    char req_buf[1024];
+    int total_read = 0;
+    while (total_read < (int)sizeof(req_buf) - 1) {
+      int len = recv(client_sock, req_buf + total_read, sizeof(req_buf) - 1 - total_read, 0);
+      if (len <= 0) break;
+      total_read += len;
+      req_buf[total_read] = '\0';
+      if (strstr(req_buf, "\r\n\r\n") != nullptr) break;
+    }
+    if (total_read <= 0) {
       close(client_sock);
       continue;
     }
-    req_buf[len] = '\0';
+
+    // Drain any remaining headers if the request exceeded buffer
+    if (strstr(req_buf, "\r\n\r\n") == nullptr) {
+      char drain[128];
+      while (true) {
+        int r = recv(client_sock, drain, sizeof(drain) - 1, MSG_DONTWAIT);
+        if (r <= 0) break;
+        drain[r] = '\0';
+        if (strstr(drain, "\r\n\r\n") != nullptr) break;
+      }
+    }
 
     if (strncmp(req_buf, "GET /history", 12) == 0 || strncmp(req_buf, "GET /api/history", 16) == 0) {
       bool is_daily = (strstr(req_buf, "type=daily") != nullptr || strstr(req_buf, "type=day") != nullptr || strstr(req_buf, "/history/daily") != nullptr);
@@ -1034,6 +1051,10 @@ void SmaBluetoothHub::http_server_task(void *param) {
           "  GET /history?type=daily[&start_year=YYYY][&mac=...]\r\n";
       send(client_sock, HELP, strlen(HELP), 0);
     }
+    // Gracefully shut down write side, send FIN, drain any unread bytes, and close
+    shutdown(client_sock, SHUT_WR);
+    char drain[128];
+    while (recv(client_sock, drain, sizeof(drain), MSG_DONTWAIT) > 0) {}
     close(client_sock);
   }
   if (server_sock >= 0) {
