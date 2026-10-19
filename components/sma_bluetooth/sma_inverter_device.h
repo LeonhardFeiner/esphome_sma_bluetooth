@@ -110,6 +110,9 @@ class SmaInverterDevice {
   // Stream historical 5-minute ring buffer data over client socket
   bool stream_history_data(SmaBluetoothHub *hub, int sock, time_t start_time, time_t end_time);
 
+  // Stream daily totals history over client socket (ArchiveMonthData 0x70200200)
+  bool stream_daily_history_data(SmaBluetoothHub *hub, int sock, int start_year, int end_year);
+
   // Called from main loop to publish cached data to ESPHome sensors
   // Returns true if new auto-sensors were just created (caller should reboot)
   bool publish_sensors();

@@ -1492,5 +1492,141 @@ bool SmaInverterDevice::stream_history_data(SmaBluetoothHub *hub, int sock, time
   return true;
 }
 
+// ============================================================
+//  SMA Daily Lifetime Totals Streamer (0x70200200 ArchiveMonthData)
+// ============================================================
+
+bool SmaInverterDevice::stream_daily_history_data(SmaBluetoothHub *hub, int sock, int start_year, int end_year) {
+  ESP_LOGI(TAG, "[%s] Starting daily totals history stream from %d to %d", mac_string_.c_str(), start_year, end_year);
+
+  if (!hub->spp_connect(bt_address_)) {
+    ESP_LOGW(TAG, "[%s] SPP connect failed for daily history stream", mac_string_.c_str());
+    return false;
+  }
+  pkt_id_ = 1;
+  hub->bt_flush_rx();
+  if (initialize_connection(hub) != E_OK) {
+    hub->spp_disconnect();
+    return false;
+  }
+
+  bool logged_on = false;
+  if (password_set_) {
+    if (logon(hub, password_, USERGROUP) == E_OK) logged_on = true;
+  }
+  if (!logged_on) {
+    for (const auto &pw : hub->get_passwords()) {
+      if (logon(hub, pw.c_str(), USERGROUP) == E_OK) {
+        set_working_password(pw);
+        logged_on = true;
+        break;
+      }
+      hub->spp_disconnect();
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      if (!hub->spp_connect(bt_address_)) return false;
+      pkt_id_ = 1;
+      hub->bt_flush_rx();
+      if (initialize_connection(hub) != E_OK) return false;
+    }
+  }
+
+  if (!logged_on) {
+    ESP_LOGE(TAG, "[%s] Logon failed for daily history stream", mac_string_.c_str());
+    hub->spp_disconnect();
+    return false;
+  }
+
+  time_t now = time(nullptr);
+  struct tm tm_now {};
+  localtime_r(&now, &tm_now);
+
+  uint64_t prev_wh = 0;
+  time_t prev_rec_date = 0;
+
+  for (int y = start_year; y <= end_year; y++) {
+    int max_m = (y == (tm_now.tm_year + 1900)) ? tm_now.tm_mon : 11;
+    for (int m = 0; m <= max_m; m++) {
+      struct tm start_tm {};
+      start_tm.tm_year = y - 1900;
+      start_tm.tm_mon = m;
+      start_tm.tm_mday = 1;
+      start_tm.tm_hour = 12;
+      start_tm.tm_min = 0;
+      start_tm.tm_sec = 0;
+      start_tm.tm_isdst = -1;
+      time_t startTime = mktime(&start_tm);
+
+      time_t q_start = startTime - (86400 * 2);
+      time_t q_end = startTime + (86400 * 33);
+
+      do {
+        pkt_id_++;
+        write_packet_header(pkt_buf_, 0x01, inv_data_.btAddress);
+        write_packet(pkt_buf_, 0x09, 0xE0, 0, inv_data_.SUSyID, inv_data_.Serial);
+        write_32(pkt_buf_, 0x70200200);  // ArchiveMonthData
+        write_32(pkt_buf_, (uint32_t)q_start);
+        write_32(pkt_buf_, (uint32_t)q_end);
+        write_packet_trailer(pkt_buf_);
+        write_packet_length(pkt_buf_);
+      } while (!is_crc_valid(pkt_buf_[pkt_buf_pos_ - 3], pkt_buf_[pkt_buf_pos_ - 2]));
+
+      hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
+
+      uint16_t pkt_count = 0;
+      do {
+        E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
+        if (rc != E_OK || !validate_checksum()) break;
+
+        pkt_count = get_u16(pkt_buf_ + 25);
+        uint16_t rcv_pkt_id = get_u16(pkt_buf_ + 27) & 0x7FFF;
+        if (pkt_id_ != rcv_pkt_id) continue;
+
+        for (int x = 41; x < (pkt_buf_pos_ - 3); x += 12) {
+          if (x + 12 > pkt_buf_pos_ - 3) break;
+          time_t rec_time = (time_t)get_u32(pkt_buf_ + x);
+          uint64_t total_wh = get_u64(pkt_buf_ + x + 4);
+          if (is_NaN(total_wh) || rec_time == 0) continue;
+
+          struct tm r_tm {};
+          gmtime_r(&rec_time, &r_tm);
+
+          // Only output records belonging to this queried month and year
+          if (r_tm.tm_mon == m && (r_tm.tm_year + 1900) == y) {
+            time_t day_key = rec_time / 86400;
+            if (day_key != prev_rec_date) {
+              prev_rec_date = day_key;
+
+              float day_kwh = 0.0f;
+              if (prev_wh > 0 && total_wh >= prev_wh) {
+                day_kwh = (float)(total_wh - prev_wh) / 1000.0f;
+              }
+
+              char date_str[16];
+              strftime(date_str, sizeof(date_str), "%Y-%m-%d", &r_tm);
+
+              char line[128];
+              int len = snprintf(line, sizeof(line), "%ld,%s,%s,%.3f,%.3f\r\n",
+                                 (long)rec_time, date_str, mac_string_.c_str(),
+                                 (float)total_wh / 1000.0f, day_kwh);
+              if (send(sock, line, len, 0) < 0) {
+                ESP_LOGW(TAG, "[%s] Client closed connection during daily history stream", mac_string_.c_str());
+                logoff(hub);
+                hub->spp_disconnect();
+                return false;
+              }
+            }
+          }
+          prev_wh = total_wh;
+        }
+      } while (pkt_count > 0);
+      vTaskDelay(pdMS_TO_TICKS(50));
+    }
+  }
+
+  logoff(hub);
+  hub->spp_disconnect();
+  return true;
+}
+
 }  // namespace sma_bluetooth
 }  // namespace esphome

@@ -90,8 +90,13 @@ class SmaBluetoothHub : public Component {
   const std::vector<std::string> &get_passwords() const { return passwords_; }
   uint32_t query_delay_ms() const { return query_delay_ms_; }
 
+  enum HistoryType {
+    HISTORY_SPOT_5MIN = 0,
+    HISTORY_DAILY_TOTALS = 1,
+  };
+
   // Historical data streaming over HTTP
-  void stream_history_request(int client_sock, int days, const std::string &mac);
+  void stream_history_request(int client_sock, HistoryType type, int param, const std::string &mac, int end_year = 0);
 
  protected:
   // Static callbacks (BT stack context)
@@ -163,7 +168,10 @@ class SmaBluetoothHub : public Component {
   TaskHandle_t http_server_task_handle_{nullptr};
   SemaphoreHandle_t history_done_sem_{nullptr};
   volatile int pending_history_sock_{-1};
+  HistoryType history_type_{HISTORY_SPOT_5MIN};
   int history_days_{1};
+  int history_start_year_{2008};
+  int history_end_year_{2026};
   std::string history_mac_;
 
   // Singleton instance for static callbacks
