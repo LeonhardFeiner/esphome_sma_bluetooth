@@ -1603,10 +1603,16 @@ bool SmaInverterDevice::stream_daily_history_data(SmaBluetoothHub *hub, int sock
       uint16_t pkt_count = 0;
       do {
         E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
-        if (rc != E_OK || !validate_checksum()) break;
+        bool valid_crc = (rc == E_OK) && validate_checksum();
+        uint16_t rcv_pkt_id = valid_crc ? (get_u16(pkt_buf_ + 27) & 0x7FFF) : 0;
+        pkt_count = valid_crc ? get_u16(pkt_buf_ + 25) : 0;
 
-        pkt_count = get_u16(pkt_buf_ + 25);
-        uint16_t rcv_pkt_id = get_u16(pkt_buf_ + 27) & 0x7FFF;
+        char dbg[160];
+        snprintf(dbg, sizeof(dbg), "# [%s] M%d/%d: rc=%d crc=%d pkcnt=%u rcv_id=%u exp_id=%u pos=%d\r\n",
+                 mac_string_.c_str(), m + 1, y, rc, (int)valid_crc, pkt_count, rcv_pkt_id, pkt_id_, pkt_buf_pos_);
+        send(sock, dbg, strlen(dbg), 0);
+
+        if (!valid_crc) break;
         if (pkt_id_ != rcv_pkt_id) continue;
 
         for (int x = 41; x < (pkt_buf_pos_ - 3); x += 12) {
@@ -1617,6 +1623,11 @@ bool SmaInverterDevice::stream_daily_history_data(SmaBluetoothHub *hub, int sock
 
           struct tm r_tm {};
           gmtime_r(&rec_time, &r_tm);
+
+          snprintf(dbg, sizeof(dbg), "# [%s] raw: %ld %04d-%02d-%02d %02d:%02d:%02d Wh=%llu (exp m=%d)\r\n",
+                   mac_string_.c_str(), (long)rec_time, r_tm.tm_year + 1900, r_tm.tm_mon + 1, r_tm.tm_mday,
+                   r_tm.tm_hour, r_tm.tm_min, r_tm.tm_sec, (unsigned long long)total_wh, m + 1);
+          send(sock, dbg, strlen(dbg), 0);
 
           // Only output records belonging to this queried month and year
           if (r_tm.tm_mon == m && (r_tm.tm_year + 1900) == y) {
