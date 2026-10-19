@@ -1385,22 +1385,32 @@ void SmaInverterDevice::create_auto_sensors(const std::string &prefix) {
 bool SmaInverterDevice::stream_history_data(SmaBluetoothHub *hub, int sock, time_t start_time, time_t end_time) {
   ESP_LOGI(TAG, "[%s] Starting history stream from %ld to %ld", mac_string_.c_str(), (long)start_time, (long)end_time);
 
+  char msg[128];
   if (!hub->spp_connect(bt_address_)) {
     ESP_LOGW(TAG, "[%s] SPP connect failed for history stream", mac_string_.c_str());
+    snprintf(msg, sizeof(msg), "# [%s] SPP connect failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
     return false;
   }
+  snprintf(msg, sizeof(msg), "# [%s] SPP connected\r\n", mac_string_.c_str());
+  send(sock, msg, strlen(msg), 0);
+
   pkt_id_ = 1;
   hub->bt_flush_rx();
   if (initialize_connection(hub) != E_OK) {
     hub->spp_disconnect();
+    snprintf(msg, sizeof(msg), "# [%s] Initialize connection failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
     return false;
   }
+  snprintf(msg, sizeof(msg), "# [%s] Init OK (NetID=0x%02X Serial=%lu)\r\n", mac_string_.c_str(), inv_data_.NetID, (unsigned long)inv_data_.Serial);
+  send(sock, msg, strlen(msg), 0);
 
   bool logged_on = false;
   if (password_set_) {
     if (logon(hub, password_, USERGROUP) == E_OK) logged_on = true;
   }
-  if (!logged_on) {
+  if (!logged_on && !configured_password_) {
     for (const auto &pw : hub->get_passwords()) {
       if (logon(hub, pw.c_str(), USERGROUP) == E_OK) {
         set_working_password(pw);
@@ -1419,8 +1429,12 @@ bool SmaInverterDevice::stream_history_data(SmaBluetoothHub *hub, int sock, time
   if (!logged_on) {
     ESP_LOGE(TAG, "[%s] Logon failed for history stream", mac_string_.c_str());
     hub->spp_disconnect();
+    snprintf(msg, sizeof(msg), "# [%s] Logon failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
     return false;
   }
+  snprintf(msg, sizeof(msg), "# [%s] Logon OK\r\n", mac_string_.c_str());
+  send(sock, msg, strlen(msg), 0);
 
   // Iterate day by day
   uint64_t prev_wh = 0;
@@ -1499,22 +1513,32 @@ bool SmaInverterDevice::stream_history_data(SmaBluetoothHub *hub, int sock, time
 bool SmaInverterDevice::stream_daily_history_data(SmaBluetoothHub *hub, int sock, int start_year, int end_year) {
   ESP_LOGI(TAG, "[%s] Starting daily totals history stream from %d to %d", mac_string_.c_str(), start_year, end_year);
 
+  char msg[128];
   if (!hub->spp_connect(bt_address_)) {
     ESP_LOGW(TAG, "[%s] SPP connect failed for daily history stream", mac_string_.c_str());
+    snprintf(msg, sizeof(msg), "# [%s] SPP connect failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
     return false;
   }
+  snprintf(msg, sizeof(msg), "# [%s] SPP connected\r\n", mac_string_.c_str());
+  send(sock, msg, strlen(msg), 0);
+
   pkt_id_ = 1;
   hub->bt_flush_rx();
   if (initialize_connection(hub) != E_OK) {
     hub->spp_disconnect();
+    snprintf(msg, sizeof(msg), "# [%s] Initialize connection failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
     return false;
   }
+  snprintf(msg, sizeof(msg), "# [%s] Init OK (NetID=0x%02X Serial=%lu)\r\n", mac_string_.c_str(), inv_data_.NetID, (unsigned long)inv_data_.Serial);
+  send(sock, msg, strlen(msg), 0);
 
   bool logged_on = false;
   if (password_set_) {
     if (logon(hub, password_, USERGROUP) == E_OK) logged_on = true;
   }
-  if (!logged_on) {
+  if (!logged_on && !configured_password_) {
     for (const auto &pw : hub->get_passwords()) {
       if (logon(hub, pw.c_str(), USERGROUP) == E_OK) {
         set_working_password(pw);
@@ -1533,8 +1557,12 @@ bool SmaInverterDevice::stream_daily_history_data(SmaBluetoothHub *hub, int sock
   if (!logged_on) {
     ESP_LOGE(TAG, "[%s] Logon failed for daily history stream", mac_string_.c_str());
     hub->spp_disconnect();
+    snprintf(msg, sizeof(msg), "# [%s] Logon failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
     return false;
   }
+  snprintf(msg, sizeof(msg), "# [%s] Logon OK, querying ArchiveMonthData %d..%d\r\n", mac_string_.c_str(), start_year, end_year);
+  send(sock, msg, strlen(msg), 0);
 
   time_t now = time(nullptr);
   struct tm tm_now {};
