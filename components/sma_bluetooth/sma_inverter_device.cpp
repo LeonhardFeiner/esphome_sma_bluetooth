@@ -296,10 +296,22 @@ E_RC SmaInverterDevice::initialize_connection(SmaBluetoothHub *hub) {
   write_packet_length(pkt_buf_);
   hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
 
-  if (get_packet(hub, inv_data_.btAddress, 1) != E_OK) return E_INIT;
-  if (!validate_checksum()) return E_CHKSUM;
-
-  inv_data_.Serial = get_u32(pkt_buf_ + 57);
+  bool got_identity = false;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
+    if (rc == E_OK && validate_checksum()) {
+      uint32_t cmd = get_u32(pkt_buf_ + 28);
+      if (cmd == 0x00000200) {
+        uint32_t ser = get_u32(pkt_buf_ + 57);
+        if (ser > 100000) {
+          inv_data_.Serial = ser;
+          got_identity = true;
+          break;
+        }
+      }
+    }
+  }
+  if (!got_identity && inv_data_.Serial < 100000) return E_INIT;
   ESP_LOGD(TAG, "[%s] Serial: %lu", mac_string_.c_str(), (unsigned long)inv_data_.Serial);
 
   return E_OK;
@@ -334,30 +346,35 @@ E_RC SmaInverterDevice::logon(SmaBluetoothHub *hub, const char *password, uint8_
   write_packet_length(pkt_buf_);
   hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
 
-  E_RC rc = get_packet(hub, FFS_6, 1);
-  if (rc != E_OK) return rc;
-  if (!validate_checksum()) return E_CHKSUM;
+  bool got_logon = false;
+  for (int attempt = 0; attempt < 4; attempt++) {
+    E_RC rc = get_packet(hub, FFS_6, 1);
+    if (rc != E_OK || !validate_checksum()) continue;
 
-  uint16_t rcv_pkt_id = get_u16(pkt_buf_ + 27) & 0x7FFF;
-  if (pkt_id_ == rcv_pkt_id && get_u32(pkt_buf_ + 41) == (uint32_t)now) {
-    inv_data_.SUSyID = get_u16(pkt_buf_ + 15);
-    inv_data_.Serial = get_u32(pkt_buf_ + 17);
+    uint32_t cmd = get_u32(pkt_buf_ + 28);
+    if (cmd == 0xFFFD040C || (get_u32(pkt_buf_ + 41) == (uint32_t)now)) {
+      inv_data_.SUSyID = get_u16(pkt_buf_ + 15);
+      inv_data_.Serial = get_u32(pkt_buf_ + 17);
 
-    // Check status word — 0x0015 means "not authenticated" (wrong password / access level)
-    uint16_t status = get_u16(pkt_buf_ + 23);
-    if (status != 0) {
-      ESP_LOGW(TAG, "[%s] Logon rejected: status=0x%04X (SUSyID=0x%02X Serial=%lu)",
-               mac_string_.c_str(), status, inv_data_.SUSyID, (unsigned long)inv_data_.Serial);
-      return E_INVPASSW;
+      uint16_t status = get_u16(pkt_buf_ + 23);
+      if (status != 0) {
+        ESP_LOGW(TAG, "[%s] Logon rejected: status=0x%04X (SUSyID=0x%02X Serial=%lu)",
+                 mac_string_.c_str(), status, inv_data_.SUSyID, (unsigned long)inv_data_.Serial);
+        return E_INVPASSW;
+      }
+
+      ESP_LOGD(TAG, "[%s] Logon OK (SUSyID=0x%02X Serial=%lu)",
+               mac_string_.c_str(), inv_data_.SUSyID, (unsigned long)inv_data_.Serial);
+      got_logon = true;
+      break;
     }
-
-    ESP_LOGD(TAG, "[%s] Logon OK (SUSyID=0x%02X Serial=%lu)",
-             mac_string_.c_str(), inv_data_.SUSyID, (unsigned long)inv_data_.Serial);
-    return E_OK;
   }
 
-  ESP_LOGD(TAG, "[%s] Logon response mismatch", mac_string_.c_str());
-  return E_INVRESP;
+  if (!got_logon) {
+    ESP_LOGD(TAG, "[%s] Logon response mismatch", mac_string_.c_str());
+    return E_INVRESP;
+  }
+  return E_OK;
 }
 
 // ============================================================
