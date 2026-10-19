@@ -988,7 +988,7 @@ void SmaBluetoothHub::http_server_task(void *param) {
         localtime_r(&now, &tm_now);
         int current_year = (tm_now.tm_year > 100) ? (tm_now.tm_year + 1900) : 2026;
 
-        int start_year = 2008;  // SMA BT classic generation began ~2008
+        int start_year = current_year - 4;  // Inverter ring buffer archive retention max ~1-4 years
         char *start_yr_ptr = strstr(req_buf, "start_year=");
         if (start_yr_ptr) {
           start_year = atoi(start_yr_ptr + 11);
@@ -1001,7 +1001,7 @@ void SmaBluetoothHub::http_server_task(void *param) {
             }
           }
         }
-        if (start_year < 2000) start_year = 2000;
+        if (start_year < 2008) start_year = 2008;
         if (start_year > current_year) start_year = current_year;
 
         static const char *HDR =
