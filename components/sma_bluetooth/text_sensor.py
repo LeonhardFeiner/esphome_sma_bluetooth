@@ -12,6 +12,7 @@ CONF_SERIAL_NUMBER = "serial_number"
 CONF_SOFTWARE_VERSION = "software_version"
 CONF_DEVICE_TYPE = "device_type"
 CONF_DEVICE_CLASS = "device_class"
+CONF_GRID_STANDARD = "grid_standard"
 CONF_INVERTER_TIME = "inverter_time"
 CONF_LAST_EVENT = "last_event"
 
@@ -25,6 +26,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_SOFTWARE_VERSION): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_DEVICE_TYPE): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_DEVICE_CLASS): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_GRID_STANDARD): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_INVERTER_TIME): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_LAST_EVENT): text_sensor.text_sensor_schema(),
     }
@@ -59,6 +61,10 @@ async def to_code(config):
     if CONF_DEVICE_CLASS in config:
         sens = await text_sensor.new_text_sensor(config[CONF_DEVICE_CLASS])
         cg.add(var.set_device_class_sensor(sens))
+
+    if CONF_GRID_STANDARD in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_GRID_STANDARD])
+        cg.add(var.set_grid_standard_sensor(sens))
 
     if CONF_INVERTER_TIME in config:
         sens = await text_sensor.new_text_sensor(config[CONF_INVERTER_TIME])

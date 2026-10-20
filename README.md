@@ -184,6 +184,7 @@ ethernet:
 | `frequency` | Hz | Grid frequency |
 | `efficiency` | % | Real-time conversion efficiency ($P_{\text{AC}} / P_{\text{DC}} \times 100$) |
 | `insulation_resistance` | kΩ | Pre-feed-in DC insulation resistance ($R_{\text{iso}}$) |
+| `residual_current` | mA | Inverter DC/AC residual leakage current (Fehlerstrom) |
 | `energy_production_day` | kWh | Daily energy yield |
 | `total_energy_production` | kWh | Lifetime energy yield |
 | `inverter_module_temp` | °C | Inverter heatsink / module temperature |
@@ -202,9 +203,13 @@ ethernet:
 | `serial_number` | Inverter serial number |
 | `software_version` | Firmware revision of the inverter controller |
 | `device_type` | Inverter model designation (e.g. `SB 5000TL-20`, `SB 5000TL-21`) |
-| `device_class` | SMA device class |
+| `device_class` | SMA device class (e.g. `Solar Inverters`) |
+| `grid_standard` | Country grid compliance profile / norm (e.g. `[DE] VDE-AR-N4105`, `[DE] VDE0126-1-1`) |
 | `mac_address` | Bluetooth hardware address |
 | `inverter_time` | Real-time clock of the inverter (synchronized with SNTP) |
+
+> [!NOTE]
+> Diagnostic device attributes (`serial_number`, `software_version`, `device_type`, `device_class`, `grid_standard`) can be defined either under the `text_sensor:` platform or directly within the `sensor:` platform block for concise YAML configs.
 
 ### Binary Sensor Platform
 

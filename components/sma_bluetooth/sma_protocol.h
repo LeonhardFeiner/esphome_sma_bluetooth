@@ -108,6 +108,7 @@ enum getInverterDataType {
   InverterTemp        = 1 << 16,
   MeteringGridMsTotW  = 1 << 17,
   SpotRiso            = 1 << 18,
+  GridStandard        = 1 << 19,
 };
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ enum LriDef {
   OperationHealth                = 0x2148,
   CoolsysTmpNom                 = 0x2377,
   DcMsWatt                      = 0x251E,
+  IsolationFltA                 = 0x254E,
   IsolationLeakRis              = 0x254F,
   MeteringTotWhOut               = 0x2601,
   MeteringDyWhOut                = 0x2622,
@@ -168,6 +170,7 @@ enum LriDef {
   BatTmpVal                      = 0x495B,
   BatVol                         = 0x495C,
   BatAmp                         = 0x495D,
+  GridGuardCntry                 = 0x671E,
   NameplateLocation              = 0x821E,
   NameplateMainModel             = 0x821F,
   NameplateModel                 = 0x8220,
@@ -220,6 +223,7 @@ struct InverterData {
   std::string SWVersion;
   uint32_t DeviceType{0};
   uint32_t DeviceClass{0};
+  uint32_t GridStandard{0};
   std::string InverterTimestamp;
 
   // Bitmask tracking which data categories were actually read this cycle.
@@ -265,6 +269,7 @@ struct DisplayData {
   float EToday{0};
   float ETotal{0};
   float Riso{0};
+  float ResidualCurrent{-1.0f};
   bool  needsMissingValues{false};
 };
 
@@ -652,6 +657,23 @@ static const StatusCode STATUS_CODES[] = {
     {9494, "STP 25-US-50"}, {9495, "STP 24-US-50"},
     {9496, "STP 20-US-50"}, {9497, "STP 15-US-50"},
     {9498, "STP 12-US-50"},
+    // Country / Grid Standards (GridGuard.Cntry)
+    {438, "[DE] VDE0126-1-1"},
+    {439, "[DE] VDE0126-1-1 Sonder"},
+    {559, "[FR] VDE0126-1-1 B"},
+    {7506, "[DE] VDE0126-1-1/UTE"},
+    {7510, "[DE] VDE-AR-N4105"},
+    {7513, "[DE] VDE-AR-N4105-MP"},
+    {7514, "[DE] VDE-AR-N4105-HP"},
+    {7543, "[CH] VDE0126-1-1-CH"},
+    {7544, "[DK] VDE-AR-N4105-DK"},
+    {7545, "[DE] VDE-AR-N4105-MC"},
+    {7584, "[DE] VDE-AR-N4105:2018 >4.6kVA"},
+    {7585, "[DE] VDE-AR-N4105:2018 Speicher >4.6kVA"},
+    {7586, "[DE] VDE-AR-N4105:2018 <=4.6kVA"},
+    {7587, "[DE] VDE-AR-N4105:2018 Speicher <=4.6kVA"},
+    {7588, "[DE] VDE-AR-N4110:2018"},
+    {7617, "[DE] VDE-AR-N4120:2018"},
 };
 static const size_t STATUS_CODES_SIZE = sizeof(STATUS_CODES) / sizeof(STATUS_CODES[0]);
 
@@ -724,13 +746,13 @@ static const getInverterDataType SLOW_QUERY_TYPES[] = {
 static const int NUM_SLOW_TYPES = sizeof(SLOW_QUERY_TYPES) / sizeof(SLOW_QUERY_TYPES[0]);
 
 static const getInverterDataType ONCE_QUERY_TYPES[] = {
-    TypeLabel, SoftwareVersion,
+    TypeLabel, SoftwareVersion, GridStandard,
 };
 static const int NUM_ONCE_TYPES = sizeof(ONCE_QUERY_TYPES) / sizeof(ONCE_QUERY_TYPES[0]);
 
 // Data types where errors are non-fatal (inverter may not support them)
 static const getInverterDataType IGNORABLE_ERROR_TYPES[] = {
-    InverterTemp, MeteringGridMsTotW, SpotRiso,
+    InverterTemp, MeteringGridMsTotW, SpotRiso, GridStandard,
 };
 static const int NUM_IGNORABLE = sizeof(IGNORABLE_ERROR_TYPES) / sizeof(IGNORABLE_ERROR_TYPES[0]);
 

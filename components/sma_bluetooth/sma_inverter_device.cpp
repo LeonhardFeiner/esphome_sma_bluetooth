@@ -409,7 +409,10 @@ E_RC SmaInverterDevice::get_inverter_data(SmaBluetoothHub *hub, getInverterDataT
     case MeteringGridMsTotW:
       command = 0x51000200; first = 0x00463600; last = 0x004637FF; break;
     case SpotRiso:
-      command = 0x51000200; first = 0x00254F00; last = 0x00254FFF; break;
+      // Query both IsolationFltA (0x00254E00) and IsolationLeakRis (0x00254F00)
+      command = 0x51000200; first = 0x00254E00; last = 0x00254FFF; break;
+    case GridStandard:
+      command = 0x51000200; first = 0x00671E00; last = 0x00671EFF; break;
     default:
       return E_BADARG;
   }
@@ -657,11 +660,21 @@ E_RC SmaInverterDevice::get_inverter_data_cfl(SmaBluetoothHub *hub, uint32_t com
             inv_data_.MeteringGridMsTotWOut = value32_; break;
           case MeteringGridMsTotWIn_LRI:
             inv_data_.MeteringGridMsTotWIn = value32_; break;
+          case IsolationFltA:
+            if (value32_ != 0xFFFFFFFF && value32_ != 0x7FFFFFFF) {
+              disp_data_.ResidualCurrent = (float)value32_;  // mA
+            }
+            break;
           case IsolationLeakRis:
             if (value32_ > 0 && value32_ != 0xFFFFFFFF && value32_ != 0x7FFFFFFF) {
               disp_data_.Riso = (float)value32_ / 1000.0f;  // convert Ohm to kOhm
             }
             break;
+          case GridGuardCntry: {
+            uint32_t attr = get_attribute(recptr) & 0x00FFFFFF;
+            inv_data_.GridStandard = attr;
+            break;
+          }
           default:
             break;
         }
@@ -1168,12 +1181,17 @@ bool SmaInverterDevice::publish_sensors() {
 #ifdef USE_TEXT_SENSOR
   publish_sensor(status_text_sensor_,
                  lookup_status_code(inv_data_.DevStatus));
-  publish_sensor(serial_number_, inv_data_.DeviceName);
+  std::string ser_str = (inv_data_.Serial > 0) ? std::to_string(inv_data_.Serial) : inv_data_.DeviceName;
+  publish_sensor(serial_number_, ser_str);
   publish_sensor(software_version_, inv_data_.SWVersion);
   publish_sensor(device_type_,
                  lookup_status_code(inv_data_.DeviceType));
   publish_sensor(device_class_,
                  lookup_status_code(inv_data_.DeviceClass));
+  if (inv_data_.GridStandard > 0) {
+    publish_sensor(grid_standard_sensor_,
+                   lookup_status_code(inv_data_.GridStandard));
+  }
   publish_sensor(inverter_time_sensor_, inv_data_.InverterTimestamp);
   publish_sensor(mac_address_sensor_, mac_string_);
   publish_sensor(last_event_sensor_, last_event_str_);
@@ -1207,6 +1225,11 @@ bool SmaInverterDevice::publish_sensors() {
   // Insulation resistance (kOhm)
   if (insulation_resistance_sensor_ != nullptr && disp_data_.Riso > 0.0f) {
     publish_sensor(insulation_resistance_sensor_, disp_data_.Riso);
+  }
+
+  // Residual current (mA)
+  if (residual_current_sensor_ != nullptr && disp_data_.ResidualCurrent >= 0.0f) {
+    publish_sensor(residual_current_sensor_, disp_data_.ResidualCurrent);
   }
 
   return sensors_created;
@@ -1319,6 +1342,8 @@ void SmaInverterDevice::create_auto_sensors(const std::string &prefix) {
               duration_fields, sensor::STATE_CLASS_TOTAL, 0);
   make_sensor(&last_event_code_sensor_, "Last Event Code",
               diag_fields, sensor::STATE_CLASS_NONE, 0);
+  make_sensor(&residual_current_sensor_, "Residual Current",
+              current_fields, sensor::STATE_CLASS_MEASUREMENT, 1);
 
   // Text sensors (diagnostic category)
 #ifdef USE_TEXT_SENSOR
@@ -1341,6 +1366,7 @@ void SmaInverterDevice::create_auto_sensors(const std::string &prefix) {
     make_ts(&software_version_, "Firmware Version", diag_fields);
     make_ts(&device_type_, "Device Type", diag_fields);
     make_ts(&device_class_, "Device Class", diag_fields);
+    make_ts(&grid_standard_sensor_, "Grid Standard", diag_fields);
     make_ts(&mac_address_sensor_, "MAC Address", diag_fields);
     make_ts(&last_event_sensor_, "Last Event", diag_fields);
   }

@@ -154,6 +154,11 @@ void test_lookup_device_class() {
     TEST_ASSERT_EQUAL_STRING("Solar Inverters", lookup_status_code(8001).c_str());
 }
 
+void test_lookup_grid_standard() {
+    TEST_ASSERT_EQUAL_STRING("[DE] VDE-AR-N4105", lookup_status_code(7510).c_str());
+    TEST_ASSERT_EQUAL_STRING("[DE] VDE0126-1-1", lookup_status_code(438).c_str());
+}
+
 // ============================================================
 //  get_version
 // ============================================================
@@ -193,6 +198,10 @@ void test_ignorable_metering() {
 
 void test_not_ignorable_dc_power() {
     TEST_ASSERT_FALSE(is_ignorable_error(SpotDCPower));
+}
+
+void test_ignorable_grid_standard() {
+    TEST_ASSERT_TRUE(is_ignorable_error(GridStandard));
 }
 
 // ============================================================
@@ -260,6 +269,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_lookup_unknown_code);
     RUN_TEST(test_lookup_device_type);
     RUN_TEST(test_lookup_device_class);
+    RUN_TEST(test_lookup_grid_standard);
 
     // Version
     RUN_TEST(test_get_version);
@@ -269,6 +279,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_ignorable_inverter_temp);
     RUN_TEST(test_ignorable_metering);
     RUN_TEST(test_not_ignorable_dc_power);
+    RUN_TEST(test_ignorable_grid_standard);
 
     // Struct layout
     RUN_TEST(test_l1hdr_size);

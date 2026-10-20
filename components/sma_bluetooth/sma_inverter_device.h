@@ -190,12 +190,14 @@ class SmaInverterDevice {
   void set_last_event_code_sensor(sensor::Sensor *s) { last_event_code_sensor_ = s; }
   void set_efficiency_sensor(sensor::Sensor *s) { efficiency_sensor_ = s; }
   void set_insulation_resistance_sensor(sensor::Sensor *s) { insulation_resistance_sensor_ = s; }
+  void set_residual_current_sensor(sensor::Sensor *s) { residual_current_sensor_ = s; }
 #ifdef USE_TEXT_SENSOR
   void set_inverter_status_sensor(text_sensor::TextSensor *s) { status_text_sensor_ = s; }
   void set_serial_number_sensor(text_sensor::TextSensor *s) { serial_number_ = s; }
   void set_software_version_sensor(text_sensor::TextSensor *s) { software_version_ = s; }
   void set_device_type_sensor(text_sensor::TextSensor *s) { device_type_ = s; }
   void set_device_class_sensor(text_sensor::TextSensor *s) { device_class_ = s; }
+  void set_grid_standard_sensor(text_sensor::TextSensor *s) { grid_standard_sensor_ = s; }
   void set_inverter_time_sensor(text_sensor::TextSensor *s) { inverter_time_sensor_ = s; }
   void set_last_event_sensor(text_sensor::TextSensor *s) { last_event_sensor_ = s; }
 #endif
@@ -307,6 +309,7 @@ class SmaInverterDevice {
   sensor::Sensor *last_event_code_sensor_{nullptr};
   sensor::Sensor *efficiency_sensor_{nullptr};
   sensor::Sensor *insulation_resistance_sensor_{nullptr};
+  sensor::Sensor *residual_current_sensor_{nullptr};
 
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *status_text_sensor_{nullptr};
@@ -314,6 +317,7 @@ class SmaInverterDevice {
   text_sensor::TextSensor *software_version_{nullptr};
   text_sensor::TextSensor *device_type_{nullptr};
   text_sensor::TextSensor *device_class_{nullptr};
+  text_sensor::TextSensor *grid_standard_sensor_{nullptr};
   text_sensor::TextSensor *inverter_time_sensor_{nullptr};
   text_sensor::TextSensor *mac_address_sensor_{nullptr};
   text_sensor::TextSensor *last_event_sensor_{nullptr};

@@ -57,6 +57,12 @@ CONF_INVERTER_FAULT = "inverter_fault"
 CONF_DYNAMIC_INTERVAL = "dynamic_interval"
 CONF_EFFICIENCY = "efficiency"
 CONF_INSULATION_RESISTANCE = "insulation_resistance"
+CONF_RESIDUAL_CURRENT = "residual_current"
+CONF_SERIAL_NUMBER = "serial_number"
+CONF_SOFTWARE_VERSION = "software_version"
+CONF_DEVICE_TYPE = "device_type"
+CONF_DEVICE_CLASS = "device_class"
+CONF_GRID_STANDARD = "grid_standard"
 
 ICON_CURRENT_DC = "mdi:current-dc"
 ICON_SINE_WAVE = "mdi:sine-wave"
@@ -219,6 +225,28 @@ CONFIG_SCHEMA = cv.Schema(
             accuracy_decimals=0,
             state_class=STATE_CLASS_MEASUREMENT,
         ),
+        cv.Optional(CONF_RESIDUAL_CURRENT): sensor.sensor_schema(
+            unit_of_measurement="mA",
+            icon=ICON_SINE_WAVE,
+            accuracy_decimals=1,
+            device_class=DEVICE_CLASS_CURRENT,
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_SERIAL_NUMBER): text_sensor.text_sensor_schema(
+            icon="mdi:numeric",
+        ),
+        cv.Optional(CONF_SOFTWARE_VERSION): text_sensor.text_sensor_schema(
+            icon="mdi:cellphone-arrow-down",
+        ),
+        cv.Optional(CONF_DEVICE_TYPE): text_sensor.text_sensor_schema(
+            icon="mdi:solar-panel",
+        ),
+        cv.Optional(CONF_DEVICE_CLASS): text_sensor.text_sensor_schema(
+            icon="mdi:solar-power",
+        ),
+        cv.Optional(CONF_GRID_STANDARD): text_sensor.text_sensor_schema(
+            icon="mdi:shield-check",
+        ),
     }
 )
 
@@ -331,3 +359,27 @@ async def to_code(config):
     if CONF_INSULATION_RESISTANCE in config:
         sens = await sensor.new_sensor(config[CONF_INSULATION_RESISTANCE])
         cg.add(var.set_insulation_resistance_sensor(sens))
+
+    if CONF_RESIDUAL_CURRENT in config:
+        sens = await sensor.new_sensor(config[CONF_RESIDUAL_CURRENT])
+        cg.add(var.set_residual_current_sensor(sens))
+
+    if CONF_SERIAL_NUMBER in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_SERIAL_NUMBER])
+        cg.add(var.set_serial_number_sensor(sens))
+
+    if CONF_SOFTWARE_VERSION in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_SOFTWARE_VERSION])
+        cg.add(var.set_software_version_sensor(sens))
+
+    if CONF_DEVICE_TYPE in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_DEVICE_TYPE])
+        cg.add(var.set_device_type_sensor(sens))
+
+    if CONF_DEVICE_CLASS in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_DEVICE_CLASS])
+        cg.add(var.set_device_class_sensor(sens))
+
+    if CONF_GRID_STANDARD in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_GRID_STANDARD])
+        cg.add(var.set_grid_standard_sensor(sens))
