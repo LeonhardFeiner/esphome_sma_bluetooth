@@ -6,7 +6,7 @@ Fork maintained with active production features:
 - **On-Demand Historical Data HTTP Streaming** directly from inverter flash ring buffers (5-min spot records and daily lifetime yields)
 - **Automatic Inverter RTC Synchronization** via SNTP
 - **Live Event & Hardware Fault Reporting** (`inverter_fault`, `last_event`, `last_event_code`)
-- **Advanced Diagnostics** (`efficiency`, `insulation_resistance`, `inverter_status`)
+- **Advanced Diagnostics** (`efficiency`, `insulation_resistance`, `residual_current`, `grid_standard`, `inverter_status`)
 - **Dynamic Polling & Memory Optimization** for long-term stability with Ethernet (WT32-ETH01) and Bluetooth Classic
 
 ---
@@ -114,6 +114,8 @@ sensor:
       name: "Inverter Efficiency"
     insulation_resistance:
       name: "Insulation Resistance"
+    residual_current:
+      name: "Residual Current"
     energy_production_day:
       name: "Daily Energy"
     total_energy_production:
@@ -129,6 +131,8 @@ text_sensor:
     mac_address: "00:80:25:AA:BB:CC"
     inverter_status:
       name: "Inverter Status"
+    grid_standard:
+      name: "Grid Standard"
     last_event:
       name: "Last Event Message"
 
