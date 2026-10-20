@@ -347,9 +347,17 @@ inline uint64_t get_u64(const uint8_t *buf) {
 }
 
 inline uint32_t get_attribute(const uint8_t *recptr) {
-  uint8_t data_type = recptr[0] >> 4;  // upper nibble
+  uint8_t data_type = recptr[3];  // record code is little-endian: data type = top byte (code >> 24)
   if (data_type == DT_STATUS) {
-    return get_u32(recptr + 16);
+    // Status/tag records carry up to 8 attribute slots after the 8-byte header. The ACTIVE one
+    // has 0x01 in its top byte; the list ends with 0x00FFFFFE. (A fixed slot returned an
+    // arbitrary, usually inactive entry: status stuck on "Fault", wrong inverter model.)
+    for (int i = 0; i < 8; i++) {
+      uint32_t a = get_u32(recptr + 8 + 4 * i);
+      if ((a >> 24) == 0x01) return a & 0x00FFFFFF;
+      if ((a & 0x00FFFFFF) == 0x00FFFFFE) break;
+    }
+    return 0x00FFFFFE;  // nothing selected
   }
   return get_u32(recptr + 8);
 }
