@@ -968,6 +968,18 @@ void SmaBluetoothHub::http_server_task(void *param) {
 
     if (strncmp(req_buf, "GET /history", 12) == 0 || strncmp(req_buf, "GET /api/history", 16) == 0) {
       bool is_daily = (strstr(req_buf, "type=daily") != nullptr || strstr(req_buf, "type=day") != nullptr || strstr(req_buf, "/history/daily") != nullptr);
+      bool is_events = (strstr(req_buf, "type=events") != nullptr);
+
+      // Optional explicit window in inverter-clock epoch seconds (needed for inverters whose RTC is off)
+      auto query_epoch = [&](const char *key) -> time_t {
+        size_t klen = strlen(key);
+        for (char *p = strstr(req_buf, key); p; p = strstr(p + 1, key)) {
+          if (p > req_buf && (p[-1] == '?' || p[-1] == '&')) return (time_t) strtoll(p + klen, nullptr, 10);
+        }
+        return 0;
+      };
+      time_t q_from = query_epoch("from=");
+      time_t q_to = query_epoch("to=");
 
       std::string req_mac;
       char *mac_ptr = strstr(req_buf, "mac=");
@@ -982,7 +994,21 @@ void SmaBluetoothHub::http_server_task(void *param) {
         req_mac = std::string(mac_str);
       }
 
-      if (is_daily) {
+      if (is_events) {
+        time_t now = time(nullptr);
+        if (q_to <= 0) q_to = now + 86400;
+        if (q_from <= 0) q_from = q_to - (time_t) 400 * 86400;
+        static const char *HDR =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/csv; charset=utf-8\r\n"
+            "Content-Disposition: attachment; filename=\"sma_events.csv\"\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "timestamp,datetime,inverter_mac,entry_id,event_code,flags,category,type,group,tag,description\r\n";
+        send(client_sock, HDR, strlen(HDR), 0);
+
+        hub->stream_history_request(client_sock, HISTORY_EVENTS, 0, req_mac, 0, q_from, q_to);
+      } else if (is_daily) {
         time_t now = time(nullptr);
         struct tm tm_now {};
         localtime_r(&now, &tm_now);
@@ -1001,7 +1027,7 @@ void SmaBluetoothHub::http_server_task(void *param) {
             }
           }
         }
-        if (start_year < 2008) start_year = 2008;
+        if (start_year < 2000) start_year = 2000;  // inverters with a reset RTC log under 2000/2001
         if (start_year > current_year) start_year = current_year;
 
         static const char *HDR =
@@ -1036,7 +1062,8 @@ void SmaBluetoothHub::http_server_task(void *param) {
             "timestamp,datetime,inverter_mac,total_kwh,power_w\r\n";
         send(client_sock, HDR, strlen(HDR), 0);
 
-        hub->stream_history_request(client_sock, HISTORY_SPOT_5MIN, days, req_mac);
+        if (q_from > 0 && q_to <= q_from) q_to = q_from + (time_t) days * 86400;
+        hub->stream_history_request(client_sock, HISTORY_SPOT_5MIN, days, req_mac, 0, q_from, q_to);
       }
     } else {
       static const char *HELP =
@@ -1048,7 +1075,9 @@ void SmaBluetoothHub::http_server_task(void *param) {
           "Usage:\r\n"
           "  GET /history?days=N[&mac=...]               (5-min spot data, N=1..180 or 'all')\r\n"
           "  GET /history?type=daily[&years=N][&mac=...] (Daily lifetime totals, years=N or 'all')\r\n"
-          "  GET /history?type=daily[&start_year=YYYY][&mac=...]\r\n";
+          "  GET /history?type=daily[&start_year=YYYY][&mac=...]\r\n"
+          "  GET /history?type=events[&from=EPOCH][&to=EPOCH][&mac=...] (user event log, default last 400 days)\r\n"
+          "  from=/to= (epoch s, inverter clock) also select the window for 5-min spot data\r\n";
       send(client_sock, HELP, strlen(HELP), 0);
     }
     // Gracefully shut down write side, send FIN, drain any unread bytes, and close
@@ -1063,15 +1092,18 @@ void SmaBluetoothHub::http_server_task(void *param) {
   vTaskDelete(nullptr);
 }
 
-void SmaBluetoothHub::stream_history_request(int client_sock, HistoryType type, int param, const std::string &mac, int end_year) {
+void SmaBluetoothHub::stream_history_request(int client_sock, HistoryType type, int param, const std::string &mac, int end_year,
+                                            time_t from, time_t to) {
   pending_history_sock_ = client_sock;
   history_type_ = type;
   if (type == HISTORY_SPOT_5MIN) {
     history_days_ = param;
-  } else {
+  } else if (type == HISTORY_DAILY_TOTALS) {
     history_start_year_ = param;
     history_end_year_ = end_year;
   }
+  history_from_ = from;
+  history_to_ = to;
   history_mac_ = mac;
   xSemaphoreTake(history_done_sem_, 0);
   xSemaphoreTake(history_done_sem_, pdMS_TO_TICKS(1800000));
@@ -1084,6 +1116,8 @@ void SmaBluetoothHub::handle_history_streaming() {
   int start_year = history_start_year_;
   int end_year = history_end_year_;
   std::string mac = history_mac_;
+  time_t from = history_from_;
+  time_t to = history_to_;
 
   time_t now = time(nullptr);
   if (now > MIN_VALID_TIME) {
@@ -1091,6 +1125,11 @@ void SmaBluetoothHub::handle_history_streaming() {
       int days = param;
       ESP_LOGI(TAG, "Starting 5-min history stream (%d days) to client socket %d", days, sock);
       time_t start_time = now - ((time_t)days * 86400);
+      time_t end_time = now;
+      if (from > 0) {
+        start_time = from;
+        end_time = to;
+      }
       struct tm tm_start;
       localtime_r(&start_time, &tm_start);
       tm_start.tm_hour = 0;
@@ -1102,7 +1141,7 @@ void SmaBluetoothHub::handle_history_streaming() {
         if (!mac.empty() && !same_mac_(mac, device->mac_string())) {
           continue;
         }
-        device->stream_history_data(this, sock, start_time, now);
+        device->stream_history_data(this, sock, start_time, end_time);
       }
     } else if (type == HISTORY_DAILY_TOTALS) {
       ESP_LOGI(TAG, "Starting daily history stream (%d..%d) to client socket %d", start_year, end_year, sock);
@@ -1111,6 +1150,14 @@ void SmaBluetoothHub::handle_history_streaming() {
           continue;
         }
         device->stream_daily_history_data(this, sock, start_year, end_year);
+      }
+    } else if (type == HISTORY_EVENTS) {
+      ESP_LOGI(TAG, "Starting event log stream (%ld..%ld) to client socket %d", (long) from, (long) to, sock);
+      for (auto *device : devices_) {
+        if (!mac.empty() && !same_mac_(mac, device->mac_string())) {
+          continue;
+        }
+        device->stream_event_data(this, sock, from, to);
       }
     }
   } else {

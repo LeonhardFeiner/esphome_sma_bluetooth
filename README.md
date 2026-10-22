@@ -226,47 +226,63 @@ ethernet:
 
 ## Historical Data HTTP Streaming (`/history`)
 
-The component includes an on-demand HTTP streaming server on port 80. It reads data directly from the SMA inverter's internal flash memory ring buffer over Bluetooth and streams CSV data over TCP with chunked transfer, requiring virtually zero ESP32 RAM.
+The component includes an on-demand HTTP streaming server on **port 8234**. It reads the inverter's internal archives over Bluetooth and streams them as CSV, using almost no ESP32 RAM. Normal polling pauses while a stream runs.
 
-### 1. 5-Minute Spot Data (Power, Voltages, Currents)
+### 1. 5-Minute Ring Buffer (`ArchiveDayData`)
 
-Download granular 5-minute telemetry intervals (`ArchiveDayData`):
-
-```http
-GET http://<esp-ip>/history?type=spot&days=7
-GET http://<esp-ip>/history?type=spot&days=all
-GET http://<esp-ip>/history?type=spot&days=1&mac=00:80:25:AA:BB:CC
-```
-
-**CSV Output Format:**
-```csv
-Timestamp,Pac_W,Pdc1_W,Pdc2_W,Udc1_V,Udc2_V,Idc1_A,Idc2_A,Uac_V,Iac_A,E_Today_kWh,E_Total_kWh
-2026-10-18 12:00:00,4820,2480,2410,380.5,385.2,6.51,6.25,231.4,20.82,21.45,108240.5
-...
-```
-
-### 2. Daily Lifetime Yields Since Commissioning (`tageserträge`)
-
-Download daily historical energy yields (`ArchiveMonthData`):
+The inverter stores only the energy counter every 5 minutes; power is derived from consecutive records. Voltages and currents are **not** archived by the inverter.
 
 ```http
-GET http://<esp-ip>/history?type=daily&years=1
-GET http://<esp-ip>/history?type=daily&years=all
-GET http://<esp-ip>/history?type=daily&years=all&mac=00:80:25:AA:BB:CC
+GET http://<esp-ip>:8234/history?days=7
+GET http://<esp-ip>:8234/history?days=all&mac=00:80:25:AA:BB:CC
+GET http://<esp-ip>:8234/history?from=<epoch>&to=<epoch>&mac=00:80:25:AA:BB:CC
 ```
 
-**CSV Output Format:**
 ```csv
-Date,Energy_Total_kWh,Daily_Yield_kWh
-2009-12-18,24.5,24.5
-2009-12-19,38.2,13.7
-...
+timestamp,datetime,inverter_mac,total_kwh,power_w
+1792666800,2026-10-22 12:00:00,00:80:25:AA:BB:CC,107655.120,1248
 ```
+
+### 2. Daily Lifetime Yields (`ArchiveMonthData`)
+
+```http
+GET http://<esp-ip>:8234/history?type=daily&years=all
+GET http://<esp-ip>:8234/history?type=daily&start_year=2009&mac=00:80:25:AA:BB:CC
+```
+
+```csv
+timestamp,date,inverter_mac,total_kwh,day_kwh
+```
+
+### 3. Event Log (`ArchiveEventData`, user group)
+
+All user-level events (faults, warnings, info) in a time window, queried in 30-day chunks. Default window: the last 400 days.
+
+```http
+GET http://<esp-ip>:8234/history?type=events&mac=00:80:25:AA:BB:CC
+GET http://<esp-ip>:8234/history?type=events&from=<epoch>&to=<epoch>&mac=00:80:25:AA:BB:CC
+```
+
+```csv
+timestamp,datetime,inverter_mac,entry_id,event_code,flags,category,type,group,tag,description
+1787027135,2026-08-18 06:25:35,00:80:25:AA:BB:CC,61319,35,0x4F00,1,0,65829,272,"Insulation resistance"
+```
+
+`type`: 0 = incoming, 1 = outgoing, 2 = event; `category`: 0 = info, 1 = warning, 2 = error.
 
 ### Query Parameters
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
+| `type` | (none), `daily`, `events` | (none) = 5-min ring buffer | Which archive to read |
+| `days` | Integer or `all` | `1` | Past days of 5-minute data |
+| `years` / `start_year` | Integer or `all` / `YYYY` (≥ 2000) | 4 years back | Range of daily totals |
+| `from`, `to` | Unix epoch seconds | — | Explicit window for 5-min data and events, in the **inverter's** clock. Use this for inverters whose clock was reset (records dated 2000/2001). |
+| `mac` | `AA:BB:CC:DD:EE:FF` | (all) | Target one inverter |
+
+The first archive query after logon is answered with an error packet by SB TL-20 units; the 5-minute and event streamers retry it once.
+
+-----------|--------|---------|-------------|
 | `type` | `spot`, `daily` | `spot` | Spot 5-minute data vs. daily energy totals |
 | `days` | Integer or `all` | `1` | Number of past days for spot data |
 | `years` | Integer or `all` | `1` | Number of past years for daily yield totals |
@@ -288,7 +304,7 @@ A full poll cycle for 2–3 inverters typically completes in 25–45 seconds.
 
 ### Inverter RTC Synchronization
 
-During each logon sequence, the component compares the inverter's internal clock against the ESP32's synchronized SNTP time (`time::RealTimeClock`). If drift exceeds threshold, it issues time-synchronization packets (`0x00010000`), ensuring all historical ring buffer entries and fault timestamps match local wall clock time.
+Once per day (first poll after midnight), the component compares each inverter's clock with the ESP32's SNTP time and sets it when the drift exceeds 60 s (`0xF000020A`). Differences over a year are treated as a bad read and skipped, unless the inverter clock is obviously reset (before 2020). Such inverters — typically with a dead RTC backup, whose clock stops at night — are re-set every morning. An invalid inverter time zone (`0x88888888`) is replaced by the ESP's standard-time offset, since the inverter ignores set-time requests that carry it. Give the `sntp` time platform an explicit `timezone:` so that offset does not depend on the build host.
 
 ### Fault & Event Log Processing
 

@@ -93,10 +93,12 @@ class SmaBluetoothHub : public Component {
   enum HistoryType {
     HISTORY_SPOT_5MIN = 0,
     HISTORY_DAILY_TOTALS = 1,
+    HISTORY_EVENTS = 2,
   };
 
   // Historical data streaming over HTTP
-  void stream_history_request(int client_sock, HistoryType type, int param, const std::string &mac, int end_year = 0);
+  void stream_history_request(int client_sock, HistoryType type, int param, const std::string &mac, int end_year = 0,
+                              time_t from = 0, time_t to = 0);
 
  protected:
   // Static callbacks (BT stack context)
@@ -173,6 +175,8 @@ class SmaBluetoothHub : public Component {
   int history_start_year_{2008};
   int history_end_year_{2026};
   std::string history_mac_;
+  time_t history_from_{0};  // explicit window (inverter clock), 0 = derive from days
+  time_t history_to_{0};
 
   // Singleton instance for static callbacks
   static SmaBluetoothHub *instance_;

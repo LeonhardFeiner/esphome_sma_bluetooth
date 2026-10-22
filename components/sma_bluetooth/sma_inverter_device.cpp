@@ -845,8 +845,26 @@ bool SmaInverterDevice::sync_inverter_time(SmaBluetoothHub *hub) {
   ESP_LOGI(TAG, "[%s] Inverter time: %ld, host: %ld (diff: %ld s, tz=%u, dst=%u)",
            mac_string_.c_str(), (long)invCurrTime, (long)hosttime, (long)diff, (unsigned)tz, (unsigned)dst);
 
-  // If clock differs by more than 60 seconds (and diff is reasonable, under 1 year)
-  if (std::abs(diff) > 60 && std::abs(diff) < 86400 * 365) {
+  // An inverter whose RTC lost power reports 0x88888888 (SMA NaN) as time zone; writing that
+  // back makes it ignore the whole set-time request, so fall back to the ESP's local offset.
+  int32_t tz_s = (int32_t) tz;
+  if (tz == 0x88888888 || tz_s < -12 * 3600 || tz_s > 14 * 3600) {
+    struct tm tm_utc, tm_loc;
+    gmtime_r(&hosttime, &tm_utc);
+    localtime_r(&hosttime, &tm_loc);
+    tm_utc.tm_isdst = tm_loc.tm_isdst;
+    time_t offset = mktime(&tm_loc) - mktime(&tm_utc);
+    // standard-time offset with dst=0, which is what working units of the same series report
+    tz = (uint32_t) (int32_t) (offset - (tm_loc.tm_isdst > 0 ? 3600 : 0)) & 0xFFFFFFFE;
+    dst = 0;
+    ESP_LOGW(TAG, "[%s] Inverter time zone invalid, using tz=%d dst=%u", mac_string_.c_str(), (int) (int32_t) tz,
+             (unsigned) dst);
+  }
+
+  // Large differences are normally a bad read and are skipped, except when the inverter clock
+  // is obviously reset (before 2020): then it is always wrong and must be corrected daily.
+  bool rtc_reset = invCurrTime < 1577836800;  // 2020-01-01
+  if (std::abs(diff) > 60 && (std::abs(diff) < 86400 * 365 || rtc_reset)) {
     ESP_LOGI(TAG, "[%s] Adjusting inverter time from %ld to host %ld...", mac_string_.c_str(), (long)invCurrTime, (long)hosttime);
     do {
       pkt_id_++;
@@ -1468,61 +1486,203 @@ bool SmaInverterDevice::stream_history_data(SmaBluetoothHub *hub, int sock, time
     time_t day_start = cur - 600;
     time_t day_end = cur + 86100;
 
-    do {
-      pkt_id_++;
-      write_packet_header(pkt_buf_, 0x01, inv_data_.btAddress);
-      write_packet(pkt_buf_, 0x09, 0xE0, 0, inv_data_.SUSyID, inv_data_.Serial);
-      write_32(pkt_buf_, 0x70000200);  // ArchiveDayData
-      write_32(pkt_buf_, (uint32_t)day_start);
-      write_32(pkt_buf_, (uint32_t)day_end);
-      write_packet_trailer(pkt_buf_);
-      write_packet_length(pkt_buf_);
-    } while (!is_crc_valid(pkt_buf_[pkt_buf_pos_ - 3], pkt_buf_[pkt_buf_pos_ - 2]));
+    // The first archive query after logon is answered with an error packet: retry it once
+    bool answered = false;
+    for (int attempt = 0; attempt < 2 && !answered; attempt++) {
+      hub->bt_flush_rx();
+      do {
+        pkt_id_++;
+        write_packet_header(pkt_buf_, 0x01, inv_data_.btAddress);
+        write_packet(pkt_buf_, 0x09, 0xE0, 0, inv_data_.SUSyID, inv_data_.Serial);
+        write_32(pkt_buf_, 0x70000200);  // ArchiveDayData
+        write_32(pkt_buf_, (uint32_t)day_start);
+        write_32(pkt_buf_, (uint32_t)day_end);
+        write_packet_trailer(pkt_buf_);
+        write_packet_length(pkt_buf_);
+      } while (!is_crc_valid(pkt_buf_[pkt_buf_pos_ - 3], pkt_buf_[pkt_buf_pos_ - 2]));
 
-    hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
+      hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
 
-    uint16_t pkt_count = 0;
-    do {
-      E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
-      if (rc != E_OK || !validate_checksum()) break;
+      uint16_t pkt_count = 0;
+      int stale = 0;
+      do {
+        E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
+        if (rc != E_OK || !validate_checksum()) break;
 
-      pkt_count = get_u16(pkt_buf_ + 25);
-      uint16_t rcv_pkt_id = get_u16(pkt_buf_ + 27) & 0x7FFF;
-      if (pkt_id_ != rcv_pkt_id) continue;
+        // A late answer to the previous request (e.g. logon) can arrive first: skip it, keep reading
+        uint16_t rcv_pkt_id = get_u16(pkt_buf_ + 27) & 0x7FFF;
+        if (rcv_pkt_id != pkt_id_) {
+          if (++stale > 5) break;
+          pkt_count = 1;
+          continue;
+        }
+        answered = true;
+        if (pkt_buf_pos_ <= 44) break;  // Empty archive response
+        pkt_count = get_u16(pkt_buf_ + 25);
 
-      for (int x = 41; x < (pkt_buf_pos_ - 3); x += 12) {
-        if (x + 12 > pkt_buf_pos_ - 3) break;
-        time_t rec_time = (time_t)get_u32(pkt_buf_ + x);
-        uint64_t total_wh = get_u64(pkt_buf_ + x + 4);
-        if (is_NaN(total_wh) || rec_time == 0) continue;
+        for (int x = 41; x < (pkt_buf_pos_ - 3); x += 12) {
+          if (x + 12 > pkt_buf_pos_ - 3) break;
+          time_t rec_time = (time_t)get_u32(pkt_buf_ + x);
+          uint64_t total_wh = get_u64(pkt_buf_ + x + 4);
+          if (is_NaN(total_wh) || rec_time == 0) continue;
 
-        float p_watt = 0.0f;
-        if (prev_wh > 0 && total_wh >= prev_wh && prev_rec_time > 0 && rec_time > prev_rec_time) {
-          uint32_t dt = (uint32_t)(rec_time - prev_rec_time);
-          if (dt >= 60 && dt <= 900) {
-            p_watt = (float)(total_wh - prev_wh) * (3600.0f / (float)dt);
+          float p_watt = 0.0f;
+          if (prev_wh > 0 && total_wh >= prev_wh && prev_rec_time > 0 && rec_time > prev_rec_time) {
+            uint32_t dt = (uint32_t)(rec_time - prev_rec_time);
+            if (dt >= 60 && dt <= 900) {
+              p_watt = (float)(total_wh - prev_wh) * (3600.0f / (float)dt);
+            }
+          }
+          prev_wh = total_wh;
+          prev_rec_time = rec_time;
+
+          struct tm r_tm;
+          localtime_r(&rec_time, &r_tm);
+          char time_str[24];
+          strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &r_tm);
+
+          char line[128];
+          int len = snprintf(line, sizeof(line), "%ld,%s,%s,%.3f,%.0f\r\n",
+                             (long)rec_time, time_str, mac_string_.c_str(),
+                             (float)total_wh / 1000.0f, p_watt);
+          if (send(sock, line, len, 0) < 0) {
+            ESP_LOGW(TAG, "[%s] Client closed connection during history stream", mac_string_.c_str());
+            logoff(hub);
+            hub->spp_disconnect();
+            return false;
           }
         }
-        prev_wh = total_wh;
-        prev_rec_time = rec_time;
+      } while (pkt_count > 0);
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
 
-        struct tm r_tm;
-        localtime_r(&rec_time, &r_tm);
-        char time_str[24];
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &r_tm);
+  logoff(hub);
+  hub->spp_disconnect();
+  return true;
+}
 
-        char line[128];
-        int len = snprintf(line, sizeof(line), "%ld,%s,%s,%.3f,%.0f\r\n",
-                           (long)rec_time, time_str, mac_string_.c_str(),
-                           (float)total_wh / 1000.0f, p_watt);
-        if (send(sock, line, len, 0) < 0) {
-          ESP_LOGW(TAG, "[%s] Client closed connection during history stream", mac_string_.c_str());
-          logoff(hub);
-          hub->spp_disconnect();
-          return false;
-        }
+// ============================================================
+//  SMA Event Log Streamer (0x70100200 ArchiveEventData)
+// ============================================================
+
+bool SmaInverterDevice::stream_event_data(SmaBluetoothHub *hub, int sock, time_t start_time, time_t end_time) {
+  ESP_LOGI(TAG, "[%s] Starting event log stream from %ld to %ld", mac_string_.c_str(), (long)start_time, (long)end_time);
+
+  char msg[128];
+  if (!hub->spp_connect(bt_address_)) {
+    ESP_LOGW(TAG, "[%s] SPP connect failed for event stream", mac_string_.c_str());
+    snprintf(msg, sizeof(msg), "# [%s] SPP connect failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
+    return false;
+  }
+  snprintf(msg, sizeof(msg), "# [%s] SPP connected\r\n", mac_string_.c_str());
+  send(sock, msg, strlen(msg), 0);
+
+  pkt_id_ = 1;
+  hub->bt_flush_rx();
+  if (initialize_connection(hub) != E_OK) {
+    hub->spp_disconnect();
+    snprintf(msg, sizeof(msg), "# [%s] Initialize connection failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
+    return false;
+  }
+
+  bool logged_on = false;
+  hub->bt_flush_rx();
+  if (password_set_) {
+    if (logon(hub, password_, USERGROUP) == E_OK) logged_on = true;
+  }
+  if (!logged_on && !configured_password_) {
+    for (const auto &pw : hub->get_passwords()) {
+      if (logon(hub, pw.c_str(), USERGROUP) == E_OK) {
+        set_working_password(pw);
+        logged_on = true;
+        break;
       }
-    } while (pkt_count > 0);
+      hub->spp_disconnect();
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      if (!hub->spp_connect(bt_address_)) return false;
+      pkt_id_ = 1;
+      hub->bt_flush_rx();
+      if (initialize_connection(hub) != E_OK) return false;
+    }
+  }
+  if (!logged_on) {
+    ESP_LOGE(TAG, "[%s] Logon failed for event stream", mac_string_.c_str());
+    hub->spp_disconnect();
+    snprintf(msg, sizeof(msg), "# [%s] Logon failed\r\n", mac_string_.c_str());
+    send(sock, msg, strlen(msg), 0);
+    return false;
+  }
+  snprintf(msg, sizeof(msg), "# [%s] Logon OK\r\n", mac_string_.c_str());
+  send(sock, msg, strlen(msg), 0);
+
+  // 30-day chunks keep each answer to a few packets
+  for (time_t cur = start_time; cur <= end_time; cur += 30 * 86400) {
+    time_t chunk_end = std::min(cur + 30 * 86400 - 1, end_time);
+    // The first archive query after logon is answered with an error packet: retry it once
+    bool answered = false;
+    for (int attempt = 0; attempt < 2 && !answered; attempt++) {
+      hub->bt_flush_rx();
+      do {
+        pkt_id_++;
+        write_packet_header(pkt_buf_, 0x01, inv_data_.btAddress);
+        write_packet(pkt_buf_, 0x09, 0xE0, 0, inv_data_.SUSyID, inv_data_.Serial);
+        write_32(pkt_buf_, 0x70100200);  // UG_USER ArchiveEventData
+        write_32(pkt_buf_, (uint32_t)cur);
+        write_32(pkt_buf_, (uint32_t)chunk_end);
+        write_packet_trailer(pkt_buf_);
+        write_packet_length(pkt_buf_);
+      } while (!is_crc_valid(pkt_buf_[pkt_buf_pos_ - 3], pkt_buf_[pkt_buf_pos_ - 2]));
+
+      hub->bt_send_packet(pkt_buf_, pkt_buf_pos_);
+
+      uint16_t pkt_count = 0;
+      int stale = 0;
+      do {
+        E_RC rc = get_packet(hub, inv_data_.btAddress, 1);
+        if (rc != E_OK || !validate_checksum()) break;
+
+        // A late answer to the previous request (e.g. logon) can arrive first: skip it, keep reading
+        uint16_t rcv_pkt_id = get_u16(pkt_buf_ + 27) & 0x7FFF;
+        if (rcv_pkt_id != pkt_id_) {
+          if (++stale > 5) break;
+          pkt_count = 1;
+          continue;
+        }
+        answered = true;
+        if (pkt_buf_pos_ <= 44) break;  // Empty archive response
+        pkt_count = get_u16(pkt_buf_ + 25);
+
+        for (uint16_t x = 41; x + sizeof(SmaEventData) <= pkt_buf_pos_ - 3; x += sizeof(SmaEventData)) {
+          const auto *ev = reinterpret_cast<const SmaEventData *>(pkt_buf_ + x);
+          if (ev->date_time == 0) continue;
+
+          time_t ev_time = (time_t)ev->date_time;
+          struct tm e_tm;
+          localtime_r(&ev_time, &e_tm);
+          char time_str[24];
+          strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &e_tm);
+
+          uint8_t category = (ev->event_flags >> 14) & 3;
+          uint8_t event_type = ev->event_flags & 7;
+          std::string desc = lookup_event_code(ev->event_code, category);
+
+          char line[256];
+          int len = snprintf(line, sizeof(line), "%ld,%s,%s,%u,%u,0x%04X,%u,%u,%lu,%lu,\"%s\"\r\n",
+                             (long)ev_time, time_str, mac_string_.c_str(), (unsigned)ev->entry_id,
+                             (unsigned)ev->event_code, (unsigned)ev->event_flags, (unsigned)category,
+                             (unsigned)event_type, (unsigned long)ev->group, (unsigned long)ev->tag, desc.c_str());
+          if (send(sock, line, len, 0) < 0) {
+            ESP_LOGW(TAG, "[%s] Client closed connection during event stream", mac_string_.c_str());
+            logoff(hub);
+            hub->spp_disconnect();
+            return false;
+          }
+        }
+      } while (pkt_count > 0);
+    }
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 
