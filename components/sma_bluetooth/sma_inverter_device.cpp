@@ -156,6 +156,15 @@ bool SmaInverterDevice::poll(SmaBluetoothHub *hub) {
   // BT signal strength
   get_bt_signal_strength(hub);
 
+  // Reset the power values handle_missing_values() may derive from V x A.
+  // Inverters without the per-phase AC / DC power records (SB 2100TL:
+  // 0x4640 and 0x251E answer 0x0015) otherwise keep the first derived value
+  // forever, because the fallback only fires while the field is still 0.
+  inv_data_.Pac1 = inv_data_.Pac2 = inv_data_.Pac3 = 0;
+  inv_data_.Pdc1 = inv_data_.Pdc2 = 0;
+  disp_data_.Pac1 = disp_data_.Pac2 = disp_data_.Pac3 = 0.0f;
+  disp_data_.Pdc1 = disp_data_.Pdc2 = 0.0f;
+
   // Query fast types (power, voltage, energy, frequency)
   int fast_failures = 0;
   for (int i = 0; i < NUM_FAST_TYPES; i++) {
